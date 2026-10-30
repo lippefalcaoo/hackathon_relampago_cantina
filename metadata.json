@@ -1,0 +1,6 @@
+{
+  "name": "Fast-Track Cantina — CESAR School",
+  "description": "Plataforma de autoatendimento inteligente, previsão de fila em tempo real e painel KDS para a Cantina da CESAR School.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
