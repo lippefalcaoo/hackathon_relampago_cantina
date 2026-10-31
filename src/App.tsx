@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Clock,
   ShoppingBag,
@@ -20,49 +20,126 @@ import {
   Search,
   Receipt,
   BadgeCheck,
-  User,
   X,
   Check,
   Utensils,
-  Sparkles,
   Store,
-  Smartphone,
+  Ban,
+  Info,
+  RotateCcw,
+  SearchX,
+  Wallet,
 } from 'lucide-react';
 
 import {
   Produto,
   CategoriaProduto,
   TipoNaturezaCodigo,
-  PreparoRapidoEstufa,
-  PreparoNaHoraCozinha,
+  StatusPedido,
+  Pedido,
   Carrinho,
   CalculadoraGargaloFila,
   ProcessadorCheckout,
+  DadosAluno,
+  DadosOperador,
+  CampoAluno,
+  CampoOperador,
+  CampoProduto,
+  ErrosCampos,
+  CATEGORIAS_PRODUTO,
+  ETAPAS_PEDIDO,
+  LIMITES,
+  ErroRegraNegocio,
+  ErroValidacao,
+  descreverErro,
+  validarEntradaProduto,
+  validarDadosAluno,
+  validarDadosOperador,
   criarDadosIniciaisCantina,
 } from './domain/cantinaDomain';
+import {
+  EstadoCantina,
+  carregarEstado,
+  interpretarEstadoSalvo,
+  observarAlteracoesExternas,
+  salvarTexto,
+  serializarEstado,
+} from './infra/persistenciaCantina';
 
 type ModuloAtivo = 'boas_vindas' | 'aluno_vitrine' | 'aluno_tracker' | 'vendedor_painel';
+
+type TipoToast = 'sucesso' | 'aviso' | 'info' | 'erro';
 
 interface NotificacaoToast {
   id: number;
   titulo: string;
   subtitulo?: string;
-  tipo: 'sucesso' | 'aviso' | 'info';
+  tipo: TipoToast;
 }
 
-const CATEGORIAS: ('Todos' | CategoriaProduto)[] = [
-  'Todos',
-  'Salgados',
-  'Lanches na Chapa',
-  'Bebidas',
-  'Doces',
-];
+const CATEGORIAS: ('Todos' | CategoriaProduto)[] = ['Todos', ...CATEGORIAS_PRODUTO];
+
+const MAX_TOASTS_VISIVEIS = 4;
+const PERFIL_ALUNO_PADRAO: DadosAluno = { nome: 'Filipe Falcão', matricula: '2026.2.001' };
+const PERFIL_OPERADOR_PADRAO: DadosOperador = { nome: 'Carlos Silva - Turno Manhã', id: 'OP-01' };
 
 function formatarMoeda(valor: number): string {
+  if (!Number.isFinite(valor)) return 'R$ --';
   return valor.toLocaleString('pt-BR', {
     style: 'currency',
     currency: 'BRL',
   });
+}
+
+/** Busca sem diferenciar acentos e maiúsculas ("cafe" encontra "Café"). */
+function normalizarTexto(texto: string): string {
+  return texto
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+}
+
+function descricaoPadrao(natureza: TipoNaturezaCodigo): string {
+  return natureza === 'ESTUFA_RAPIDO'
+    ? 'Pronto na estufa para retirada rápida no intervalo.'
+    : 'Preparado na hora na chapa quente da cantina.';
+}
+
+/** Classes de borda de um campo de formulário, destacando quando há erro. */
+function classeBordaCampo(erro?: string): string {
+  return erro
+    ? 'border-red-400 bg-red-50/40 focus:border-red-500'
+    : 'border-slate-200 bg-slate-50 focus:border-[#FF6B00] focus:bg-white';
+}
+
+function MensagemCampo({ id, erro }: { id: string; erro?: string }) {
+  if (!erro) return null;
+  return (
+    <p id={id} className="mt-1 text-[11px] font-semibold text-red-700">
+      {erro}
+    </p>
+  );
+}
+
+/** Carrega o estado salvo (ou os dados de demonstração) uma única vez. */
+function inicializarCantina(): {
+  estado: EstadoCantina;
+  avisos: string[];
+  processadores: ProcessadorCheckout[];
+} {
+  const demonstracao = criarDadosIniciaisCantina();
+  const carregado = carregarEstado();
+  return {
+    estado: carregado.estado ?? {
+      cardapio: demonstracao.cardapioInicial,
+      gerenciador: demonstracao.gerenciadorInicial,
+      perfilAluno: null,
+      perfilOperador: null,
+    },
+    avisos: carregado.avisos,
+    processadores: demonstracao.processadoresDisponiveis,
+  };
 }
 
 function IlustracaoProdutoCantina({
@@ -238,30 +315,38 @@ function IlustracaoProdutoCantina({
 }
 
 export default function App() {
-  const dadosIniciais = useMemo(() => criarDadosIniciaisCantina(), []);
+  const [inicial] = useState(inicializarCantina);
 
-  const [cardapio, setCardapio] = useState<Produto[]>(dadosIniciais.cardapioInicial);
-  const [gerenciadorPedidos] = useState(() => dadosIniciais.gerenciadorInicial);
-  const [processadoresCheckout] = useState<ProcessadorCheckout[]>(
-    () => dadosIniciais.processadoresDisponiveis
-  );
+  const [cardapio, setCardapio] = useState<Produto[]>(inicial.estado.cardapio);
+  const [gerenciadorPedidos] = useState(() => inicial.estado.gerenciador);
+  const [processadoresCheckout] = useState<ProcessadorCheckout[]>(() => inicial.processadores);
   const [carrinho] = useState(() => new Carrinho());
   const [calculadoraGargalo] = useState(() => new CalculadoraGargaloFila());
 
   const [versaoEstado, setVersaoEstado] = useState<number>(0);
-  const sincronizarInterface = () => setVersaoEstado((v) => v + 1);
+  const sincronizarInterface = useCallback(() => setVersaoEstado((v) => v + 1), []);
 
   // Inicia na Tela de Boas-Vindas (Home/Landing Screen)
   const [moduloAtivo, setModuloAtivo] = useState<ModuloAtivo>('boas_vindas');
 
-  // Perfis Pré-Definidos conforme especificação
-  const [alunoNome, setAlunoNome] = useState<string>('Filipe Falcão');
-  const [alunoMatricula, setAlunoMatricula] = useState<string>('2026.2.001');
+  // Perfis: o valor "confirmado" só muda depois de validado; a edição usa um rascunho.
+  const [perfilAluno, setPerfilAluno] = useState<DadosAluno>(
+    inicial.estado.perfilAluno ?? PERFIL_ALUNO_PADRAO
+  );
+  const [rascunhoAluno, setRascunhoAluno] = useState<DadosAluno>(perfilAluno);
+  const [errosAluno, setErrosAluno] = useState<ErrosCampos<CampoAluno>>({});
   const [editandoPerfilAluno, setEditandoPerfilAluno] = useState<boolean>(false);
+  const alunoNome = perfilAluno.nome;
+  const alunoMatricula = perfilAluno.matricula;
 
-  const [operadorNome, setOperadorNome] = useState<string>('Carlos Silva - Turno Manhã');
-  const [operadorId, setOperadorId] = useState<string>('OP-01');
+  const [perfilOperador, setPerfilOperador] = useState<DadosOperador>(
+    inicial.estado.perfilOperador ?? PERFIL_OPERADOR_PADRAO
+  );
+  const [rascunhoOperador, setRascunhoOperador] = useState<DadosOperador>(perfilOperador);
+  const [errosOperador, setErrosOperador] = useState<ErrosCampos<CampoOperador>>({});
   const [editandoPerfilOperador, setEditandoPerfilOperador] = useState<boolean>(false);
+  const operadorNome = perfilOperador.nome;
+  const operadorId = perfilOperador.id;
 
   // Controles da Vitrine do Aluno
   const [categoriaSelecionada, setCategoriaSelecionada] = useState<'Todos' | CategoriaProduto>('Todos');
@@ -274,7 +359,16 @@ export default function App() {
   // Controles do Painel do Vendedor (KDS + CRUD Modal/Inline)
   const [abaVendedor, setAbaVendedor] = useState<'kds' | 'cardapio'>('kds');
   const [filtroStatusKDS, setFiltroStatusKDS] = useState<'ATIVOS' | 'TODOS'>('ATIVOS');
-  const [produtoEditando, setProdutoEditando] = useState<Produto | null>(null);
+  const [pedidoConfirmandoCancelamento, setPedidoConfirmandoCancelamento] = useState<string | null>(null);
+  const [confirmandoRestauracao, setConfirmandoRestauracao] = useState<boolean>(false);
+
+  // O modal guarda só o ID: se o produto sumir (outra aba), o modal fecha sozinho.
+  const [produtoEditandoId, setProdutoEditandoId] = useState<string | null>(null);
+  const produtoEditando = produtoEditandoId
+    ? cardapio.find((p) => p.obterId() === produtoEditandoId) ?? null
+    : null;
+  const setProdutoEditando = (produto: Produto | null) =>
+    setProdutoEditandoId(produto ? produto.obterId() : null);
 
   // Campos para adicionar novo produto
   const [novoNome, setNovoNome] = useState<string>('');
@@ -283,6 +377,7 @@ export default function App() {
   const [novaNatureza, setNovaNatureza] = useState<TipoNaturezaCodigo>('ESTUFA_RAPIDO');
   const [novoTempoBase, setNovoTempoBase] = useState<string>('2');
   const [novaDescricao, setNovaDescricao] = useState<string>('');
+  const [errosNovoProduto, setErrosNovoProduto] = useState<ErrosCampos<CampoProduto>>({});
 
   // Campos para o modal de edição de produto existente
   const [editNome, setEditNome] = useState<string>('');
@@ -291,26 +386,151 @@ export default function App() {
   const [editNatureza, setEditNatureza] = useState<TipoNaturezaCodigo>('ESTUFA_RAPIDO');
   const [editTempoBase, setEditTempoBase] = useState<string>('2');
   const [editDescricao, setEditDescricao] = useState<string>('');
+  const [errosEdicaoProduto, setErrosEdicaoProduto] = useState<ErrosCampos<CampoProduto>>({});
 
   // Sistema de Notificações Toast
   const [toasts, setToasts] = useState<NotificacaoToast[]>([]);
-  const dispararToast = (
-    titulo: string,
-    subtitulo?: string,
-    tipo: 'sucesso' | 'aviso' | 'info' = 'sucesso'
-  ) => {
-    const id = Date.now() + Math.random();
-    setToasts((prev) => [...prev, { id, titulo, subtitulo, tipo }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3400);
-  };
+  const timersToast = useRef(new Map<number, number>());
+
+  const fecharToast = useCallback((id: number) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+    const timer = timersToast.current.get(id);
+    if (timer !== undefined) {
+      window.clearTimeout(timer);
+      timersToast.current.delete(id);
+    }
+  }, []);
+
+  const dispararToast = useCallback(
+    (titulo: string, subtitulo?: string, tipo: TipoToast = 'sucesso') => {
+      const id = Date.now() + Math.random();
+      setToasts((prev) => {
+        // Evita pilhas de mensagens iguais (ex.: vários cliques no mesmo botão).
+        const semRepetidos = prev.filter((t) => !(t.titulo === titulo && t.subtitulo === subtitulo));
+        return [...semRepetidos, { id, titulo, subtitulo, tipo }].slice(-MAX_TOASTS_VISIVEIS);
+      });
+      const duracao = tipo === 'erro' || tipo === 'aviso' ? 6500 : 3400;
+      timersToast.current.set(id, window.setTimeout(() => fecharToast(id), duracao));
+    },
+    [fecharToast]
+  );
+
+  useEffect(() => {
+    const timers = timersToast.current;
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+      timers.clear();
+    };
+  }, []);
+
+  /**
+   * Executa uma ação do usuário com tratamento de erro padronizado:
+   * erros de regra/validação viram aviso amigável; erros inesperados viram
+   * mensagem genérica + log no console. A tela nunca fica em estado quebrado.
+   */
+  const executarAcao = useCallback(
+    (contexto: string, acao: () => void): boolean => {
+      try {
+        acao();
+        return true;
+      } catch (erro) {
+        const { titulo, detalhe, esperado } = descreverErro(erro, contexto);
+        if (!esperado) console.error(`[Fast-Track Cantina] falha ao ${contexto}:`, erro);
+        dispararToast(titulo, detalhe, esperado ? 'aviso' : 'erro');
+        sincronizarInterface();
+        return false;
+      }
+    },
+    [dispararToast, sincronizarInterface]
+  );
+
+  // Avisos sobre dados salvos que precisaram de ajuste ao abrir o app.
+  useEffect(() => {
+    for (const aviso of inicial.avisos) {
+      dispararToast('Dados restaurados com ajustes', aviso, 'aviso');
+    }
+  }, [inicial, dispararToast]);
+
+  // Persistência: salva sempre que algo muda (só grava se o conteúdo for diferente).
+  const ultimoTextoSalvo = useRef<string | null>(null);
+  const avisouFalhaSalvamento = useRef(false);
+
+  useEffect(() => {
+    let texto: string;
+    try {
+      texto = serializarEstado({
+        cardapio,
+        gerenciador: gerenciadorPedidos,
+        perfilAluno,
+        perfilOperador,
+      });
+    } catch (erro) {
+      console.error('[Fast-Track Cantina] falha ao preparar dados para salvar:', erro);
+      return;
+    }
+    if (texto === ultimoTextoSalvo.current) return;
+
+    const resultado = salvarTexto(texto);
+    if (resultado.ok) {
+      ultimoTextoSalvo.current = texto;
+      avisouFalhaSalvamento.current = false;
+    } else if (!avisouFalhaSalvamento.current) {
+      avisouFalhaSalvamento.current = true;
+      dispararToast(
+        'Os dados não estão sendo salvos',
+        `${resultado.motivo} Tudo continua funcionando, mas some ao recarregar a página.`,
+        'aviso'
+      );
+    }
+  }, [versaoEstado, cardapio, perfilAluno, perfilOperador, gerenciadorPedidos, dispararToast]);
+
+  // Sincronização entre abas: ex. aluno numa aba e KDS da cozinha em outra.
+  useEffect(() => {
+    return observarAlteracoesExternas((novoTexto) => {
+      if (novoTexto === null || novoTexto === ultimoTextoSalvo.current) return;
+      const { estado } = interpretarEstadoSalvo(novoTexto, { guardarBackup: false });
+      if (!estado) return;
+
+      ultimoTextoSalvo.current = novoTexto;
+      gerenciadorPedidos.substituirEstado(
+        estado.gerenciador.obterTodosPedidos(),
+        estado.gerenciador.obterSequencialTicket()
+      );
+      const removidosDoCarrinho = carrinho.reconciliarComCardapio(estado.cardapio);
+      setCardapio(estado.cardapio);
+      if (estado.perfilAluno) setPerfilAluno(estado.perfilAluno);
+      if (estado.perfilOperador) setPerfilOperador(estado.perfilOperador);
+      sincronizarInterface();
+
+      if (removidosDoCarrinho.length > 0) {
+        dispararToast(
+          'Itens removidos do seu carrinho',
+          `${removidosDoCarrinho.join(', ')} saiu do cardápio.`,
+          'aviso'
+        );
+      }
+    });
+  }, [gerenciadorPedidos, carrinho, sincronizarInterface, dispararToast]);
+
+  // Esc fecha o modal de edição ou o carrinho.
+  useEffect(() => {
+    if (!drawerCarrinhoAberto && !produtoEditandoId) return;
+    const aoTeclar = (evento: KeyboardEvent) => {
+      if (evento.key !== 'Escape') return;
+      if (produtoEditandoId) setProdutoEditandoId(null);
+      else setDrawerCarrinhoAberto(false);
+    };
+    window.addEventListener('keydown', aoTeclar);
+    return () => window.removeEventListener('keydown', aoTeclar);
+  }, [drawerCarrinhoAberto, produtoEditandoId]);
 
   // Leituras em tempo real do estado em memória
   const todosPedidos = gerenciadorPedidos.obterTodosPedidos();
   const itensCarrinho = carrinho.obterItens();
   const valorTotalCarrinho = carrinho.calcularValorTotal();
   const quantidadeTotalCarrinho = carrinho.obterQuantidadeTotalItens();
+  const itensIndisponiveisCarrinho = carrinho.obterItensIndisponiveis();
+  const carrinhoNoLimite = quantidadeTotalCarrinho >= LIMITES.unidadesPorPedido;
 
   // Cálculo Dinâmico de Gargalo na Cozinha
   const minutosGargaloAtivoChapa = calculadoraGargalo.calcularMinutosGargaloCozinha(todosPedidos);
@@ -318,6 +538,7 @@ export default function App() {
   const diagnosticoCarrinho = calculadoraGargalo.diagnosticarCarrinho(carrinho, todosPedidos);
 
   // Filtragem de produtos na vitrine do aluno
+  const termoBusca = normalizarTexto(buscaTexto);
   const produtosVitrine = cardapio.filter((produto) => {
     if (categoriaSelecionada !== 'Todos' && produto.obterCategoria() !== categoriaSelecionada) {
       return false;
@@ -325,14 +546,21 @@ export default function App() {
     if (filtroNatureza !== 'TODOS' && produto.obterCodigoNatureza() !== filtroNatureza) {
       return false;
     }
-    if (buscaTexto.trim() !== '') {
-      const termo = buscaTexto.toLowerCase();
-      const bateNome = produto.obterNome().toLowerCase().includes(termo);
-      const bateDesc = produto.obterDescricao().toLowerCase().includes(termo);
+    if (termoBusca !== '') {
+      const bateNome = normalizarTexto(produto.obterNome()).includes(termoBusca);
+      const bateDesc = normalizarTexto(produto.obterDescricao()).includes(termoBusca);
       if (!bateNome && !bateDesc) return false;
     }
     return true;
   });
+  const filtrosVitrineAtivos =
+    categoriaSelecionada !== 'Todos' || filtroNatureza !== 'TODOS' || termoBusca !== '';
+
+  const limparFiltrosVitrine = () => {
+    setCategoriaSelecionada('Todos');
+    setFiltroNatureza('TODOS');
+    setBuscaTexto('');
+  };
 
   // Ações de Seleção de Perfil na Tela Inicial
   const entrarComoCompradorAluno = () => {
@@ -353,82 +581,188 @@ export default function App() {
     );
   };
 
+  // Edição dos perfis (aluno e operador) com validação antes de confirmar
+  const iniciarEdicaoAluno = () => {
+    setRascunhoAluno(perfilAluno);
+    setErrosAluno({});
+    setEditandoPerfilAluno(true);
+  };
+
+  const salvarPerfilAluno = () => {
+    const resultado = validarDadosAluno(rascunhoAluno.nome, rascunhoAluno.matricula);
+    if (!resultado.ok) {
+      setErrosAluno(resultado.erros);
+      return;
+    }
+    setPerfilAluno(resultado.valor);
+    setErrosAluno({});
+    setEditandoPerfilAluno(false);
+    dispararToast('Aluno atualizado', `${resultado.valor.nome} · Matrícula ${resultado.valor.matricula}`, 'info');
+  };
+
+  const cancelarEdicaoAluno = () => {
+    setErrosAluno({});
+    setEditandoPerfilAluno(false);
+  };
+
+  const iniciarEdicaoOperador = () => {
+    setRascunhoOperador(perfilOperador);
+    setErrosOperador({});
+    setEditandoPerfilOperador(true);
+  };
+
+  const salvarPerfilOperador = () => {
+    const resultado = validarDadosOperador(rascunhoOperador.nome, rascunhoOperador.id);
+    if (!resultado.ok) {
+      setErrosOperador(resultado.erros);
+      return;
+    }
+    setPerfilOperador(resultado.valor);
+    setErrosOperador({});
+    setEditandoPerfilOperador(false);
+    dispararToast('Operador atualizado', `${resultado.valor.nome} (${resultado.valor.id})`, 'info');
+  };
+
+  const cancelarEdicaoOperador = () => {
+    setErrosOperador({});
+    setEditandoPerfilOperador(false);
+  };
+
+  const aoTeclarNoPerfil = (salvar: () => void, cancelar: () => void) => (evento: React.KeyboardEvent) => {
+    if (evento.key === 'Enter') {
+      evento.preventDefault();
+      salvar();
+    } else if (evento.key === 'Escape') {
+      cancelar();
+    }
+  };
+
   // Ações do Carrinho
   const handleAdicionarAoCarrinho = (produto: Produto) => {
-    carrinho.adicionarProduto(produto, 1);
-    sincronizarInterface();
-    const tempoEst = calculadoraGargalo.calcularTempoEstimadoProduto(produto, todosPedidos);
-    dispararToast(
-      `${produto.obterNome()} adicionado!`,
-      `Estimativa atual: ~${tempoEst} min · Total no carrinho: ${carrinho.obterQuantidadeTotalItens()} iten(s)`,
-      'sucesso'
-    );
+    executarAcao('adicionar o item ao carrinho', () => {
+      carrinho.adicionarProduto(produto, 1);
+      sincronizarInterface();
+      const tempoEst = calculadoraGargalo.calcularTempoEstimadoProduto(produto, todosPedidos);
+      dispararToast(
+        `${produto.obterNome()} adicionado!`,
+        `Estimativa atual: ~${tempoEst} min · Total no carrinho: ${carrinho.obterQuantidadeTotalItens()} item(ns)`,
+        'sucesso'
+      );
+    });
   };
 
   const handleAlterarQuantidadeCarrinho = (produtoId: string, novaQtd: number) => {
-    carrinho.alterarQuantidade(produtoId, novaQtd);
-    sincronizarInterface();
+    executarAcao('alterar a quantidade', () => {
+      carrinho.alterarQuantidade(produtoId, novaQtd);
+      sincronizarInterface();
+    });
   };
 
   const handleRemoverDoCarrinho = (produtoId: string) => {
-    carrinho.removerProduto(produtoId);
-    sincronizarInterface();
+    executarAcao('remover o item', () => {
+      carrinho.removerProduto(produtoId);
+      sincronizarInterface();
+    });
   };
 
   const handleSubstituirChapaPorEstufa = () => {
-    const opcoesEstufa = cardapio.filter((p) => !p.utilizaGargaloCozinha());
-    if (opcoesEstufa.length === 0) return;
-
-    for (const item of carrinho.obterItens()) {
-      if (item.utilizaGargaloCozinha()) {
-        carrinho.removerProduto(item.obterProdutoId());
+    executarAcao('trocar os itens de chapa', () => {
+      const itensChapa = carrinho.obterItens().filter((item) => item.utilizaGargaloCozinha());
+      if (itensChapa.length === 0) {
+        dispararToast('Seu pedido já é só de estufa', 'Não há itens de chapa para trocar.', 'info');
+        return;
       }
-    }
-    carrinho.adicionarProduto(opcoesEstufa[0], 1);
-    sincronizarInterface();
-    dispararToast(
-      'Pedido otimizado para Estufa Expressa!',
-      `Itens de chapa trocados por ${opcoesEstufa[0].obterNome()} (~${opcoesEstufa[0].obterTempoBaseMinutos()} min).`,
-      'sucesso'
-    );
+      const opcaoEstufa = cardapio.find((p) => !p.utilizaGargaloCozinha() && p.estaDisponivel());
+      if (!opcaoEstufa) {
+        throw new ErroRegraNegocio('Não há itens de estufa disponíveis agora. Mantenha o pedido ou remova itens da chapa.');
+      }
+
+      for (const item of itensChapa) carrinho.removerProduto(item.obterProdutoId());
+      try {
+        carrinho.adicionarProduto(opcaoEstufa, 1);
+      } catch (erro) {
+        // Desfaz a troca para o aluno não perder o que tinha escolhido.
+        for (const item of itensChapa) {
+          try {
+            carrinho.adicionarProduto(item.obterProduto(), item.obterQuantidade());
+          } catch {
+            /* item ficou indisponível no meio do caminho: segue sem ele */
+          }
+        }
+        throw erro;
+      } finally {
+        sincronizarInterface();
+      }
+
+      dispararToast(
+        'Pedido otimizado para Estufa Expressa!',
+        `Itens de chapa trocados por ${opcaoEstufa.obterNome()} (~${opcaoEstufa.obterTempoBaseMinutos()} min).`,
+        'sucesso'
+      );
+    });
   };
 
   // Finalização de Checkout e Roteamento de Filas
+  const finalizandoPedido = useRef(false);
+
   const handleFinalizarPedido = (e: React.FormEvent) => {
     e.preventDefault();
-    if (carrinho.estaVazio()) {
-      dispararToast('Seu carrinho está vazio', 'Adicione pelo menos um item para continuar.', 'aviso');
-      return;
-    }
+    // Trava contra duplo clique / Enter repetido gerando dois pedidos.
+    if (finalizandoPedido.current) return;
+    finalizandoPedido.current = true;
+    window.setTimeout(() => {
+      finalizandoPedido.current = false;
+    }, 800);
 
-    const processadorEscolhido =
-      processadoresCheckout.find((p) => p.obterCodigo() === codigoMetodoSelecionado) ??
-      processadoresCheckout[0];
+    executarAcao('finalizar o pedido', () => {
+      const processadorEscolhido = processadoresCheckout.find(
+        (p) => p.obterCodigo() === codigoMetodoSelecionado
+      );
+      if (!processadorEscolhido) {
+        throw new ErroValidacao('Escolha uma forma de pagamento para continuar.');
+      }
 
-    const novoPedido = gerenciadorPedidos.finalizarPedido(
-      { nome: alunoNome || 'Filipe Falcão', matricula: alunoMatricula || '2026.2.001' },
-      carrinho,
-      processadorEscolhido,
-      calculadoraGargalo
-    );
+      const novoPedido = gerenciadorPedidos.finalizarPedido(
+        perfilAluno,
+        carrinho,
+        processadorEscolhido,
+        calculadoraGargalo
+      );
 
-    setPedidoAcompanhadoId(novoPedido.obterId());
-    setDrawerCarrinhoAberto(false);
-    sincronizarInterface();
-    setModuloAtivo('aluno_tracker');
+      setPedidoAcompanhadoId(novoPedido.obterId());
+      setDrawerCarrinhoAberto(false);
+      sincronizarInterface();
+      setModuloAtivo('aluno_tracker');
 
-    dispararToast(
-      `Pedido ${novoPedido.obterCodigoTicket()} enviado!`,
-      `${novoPedido.obterNomeTicketFila()} gerado com sucesso.`,
-      'sucesso'
-    );
+      dispararToast(
+        `Pedido ${novoPedido.obterCodigoTicket()} enviado!`,
+        `${novoPedido.obterNomeTicketFila()} gerado com sucesso.`,
+        'sucesso'
+      );
+    });
   };
 
   // Ações do KDS (Visão Funcionário)
-  const handleAvancarStatusPedido = (pedidoId: string) => {
-    const pedido = gerenciadorPedidos.avancarStatusPedido(pedidoId, operadorNome);
-    sincronizarInterface();
-    if (pedido) {
+
+  /**
+   * Trava curta por pedido: no duplo clique, o 2º clique cairia no botão da
+   * etapa seguinte (que aparece no mesmo lugar) e pularia uma etapa.
+   */
+  const ultimaAcaoPorPedido = useRef(new Map<string, number>());
+  const acaoMuitoRecente = (pedidoId: string): boolean => {
+    const agora = Date.now();
+    const anterior = ultimaAcaoPorPedido.current.get(pedidoId) ?? 0;
+    if (agora - anterior < 700) return true;
+    ultimaAcaoPorPedido.current.set(pedidoId, agora);
+    return false;
+  };
+
+  const handleAvancarStatusPedido = (pedidoId: string, statusEsperado: StatusPedido) => {
+    if (acaoMuitoRecente(pedidoId)) return;
+    executarAcao('atualizar o pedido', () => {
+      const pedido = gerenciadorPedidos.avancarStatusPedido(pedidoId, operadorNome, statusEsperado);
+      setPedidoConfirmandoCancelamento(null);
+      sincronizarInterface();
       dispararToast(
         `Pedido ${pedido.obterCodigoTicket()} → ${pedido.obterStatus()}`,
         pedido.obterStatus() === 'Pronto para Retirada'
@@ -436,104 +770,196 @@ export default function App() {
           : `Atualizado por ${operadorNome}`,
         'sucesso'
       );
+    });
+  };
+
+  const handleConfirmarPagamento = (pedidoId: string) => {
+    if (acaoMuitoRecente(pedidoId)) return;
+    executarAcao('registrar o pagamento', () => {
+      const pedido = gerenciadorPedidos.confirmarPagamentoPedido(pedidoId, operadorNome);
+      sincronizarInterface();
+      dispararToast(
+        `Pagamento do ${pedido.obterCodigoTicket()} registrado`,
+        `${formatarMoeda(pedido.obterValorTotal())} recebidos no caixa. Pedido liberado para entrega.`,
+        'sucesso'
+      );
+    });
+  };
+
+  const handleCancelarPedido = (pedido: Pedido) => {
+    // Confirmação em dois cliques (window.confirm é bloqueado em alguns iframes).
+    if (pedidoConfirmandoCancelamento !== pedido.obterId()) {
+      setPedidoConfirmandoCancelamento(pedido.obterId());
+      return;
     }
+    executarAcao('cancelar o pedido', () => {
+      gerenciadorPedidos.cancelarPedido(pedido.obterId(), operadorNome, pedido.obterStatus());
+      setPedidoConfirmandoCancelamento(null);
+      sincronizarInterface();
+      dispararToast(
+        `Pedido ${pedido.obterCodigoTicket()} cancelado`,
+        'A carga da chapa e a estimativa dos alunos foram recalculadas.',
+        'info'
+      );
+    });
   };
 
   // Ações de Gestão de Cardápio (CRUD)
+  const nomeJaExiste = (nome: string, ignorarId?: string) => {
+    const alvo = normalizarTexto(nome);
+    return cardapio.some((p) => p.obterId() !== ignorarId && normalizarTexto(p.obterNome()) === alvo);
+  };
+
   const handleCriarNovoProduto = (e: React.FormEvent) => {
     e.preventDefault();
-    const precoNum = parseFloat(novoPreco.replace(',', '.'));
-    const tempoNum = parseInt(novoTempoBase, 10) || (novaNatureza === 'ESTUFA_RAPIDO' ? 2 : 6);
+    executarAcao('cadastrar o produto', () => {
+      const resultado = validarEntradaProduto({
+        nome: novoNome,
+        descricao: novaDescricao,
+        preco: novoPreco,
+        categoria: novaCategoria,
+        natureza: novaNatureza,
+        tempoBase: novoTempoBase,
+      });
+      const erros: ErrosCampos<CampoProduto> = resultado.ok ? {} : { ...resultado.erros };
+      if (resultado.ok && nomeJaExiste(resultado.valor.nome)) {
+        erros.nome = 'Já existe um produto com esse nome no cardápio.';
+      }
+      if (!resultado.ok || Object.keys(erros).length > 0) {
+        setErrosNovoProduto(erros);
+        dispararToast('Revise os campos destacados', Object.values(erros)[0], 'aviso');
+        return;
+      }
 
-    if (!novoNome.trim() || Number.isNaN(precoNum) || precoNum <= 0) {
-      dispararToast('Dados inválidos', 'Informe o nome e um valor maior que zero.', 'aviso');
-      return;
-    }
+      const novoProduto = new Produto({
+        ...resultado.valor,
+        descricao: resultado.valor.descricao || descricaoPadrao(novaNatureza),
+      });
 
-    const estrategia =
-      novaNatureza === 'ESTUFA_RAPIDO'
-        ? new PreparoRapidoEstufa(tempoNum)
-        : new PreparoNaHoraCozinha(tempoNum, 3);
+      setCardapio((prev) => [novoProduto, ...prev]);
+      setNovoNome('');
+      setNovoPreco('');
+      setNovaDescricao('');
+      setNovaNatureza('ESTUFA_RAPIDO');
+      setNovoTempoBase(String(LIMITES.tempoBase.ESTUFA_RAPIDO.padrao));
+      setErrosNovoProduto({});
+      sincronizarInterface();
 
-    const novoProduto = new Produto({
-      nome: novoNome,
-      preco: precoNum,
-      categoria: novaCategoria,
-      naturezaPreparo: estrategia,
-      descricao:
-        novaDescricao.trim() ||
-        (novaNatureza === 'ESTUFA_RAPIDO'
-          ? 'Pronto na estufa para retirada rápida no intervalo.'
-          : 'Preparado na hora na chapa quente da cantina.'),
+      dispararToast(
+        'Produto cadastrado no cardápio!',
+        `${novoProduto.obterNome()} já está visível na vitrine dos alunos.`,
+        'sucesso'
+      );
     });
-
-    setCardapio((prev) => [novoProduto, ...prev]);
-    setNovoNome('');
-    setNovoPreco('');
-    setNovaDescricao('');
-    setNovaNatureza('ESTUFA_RAPIDO');
-    setNovoTempoBase('2');
-    sincronizarInterface();
-
-    dispararToast(
-      'Produto cadastrado no cardápio!',
-      `${novoProduto.obterNome()} já está visível na vitrine dos alunos.`,
-      'sucesso'
-    );
   };
 
   const abrirModalEdicaoProduto = (produto: Produto) => {
     setProdutoEditando(produto);
     setEditNome(produto.obterNome());
-    setEditPreco(String(produto.obterPreco()));
+    setEditPreco(produto.obterPreco().toFixed(2));
     setEditCategoria(produto.obterCategoria());
     setEditNatureza(produto.obterCodigoNatureza());
     setEditTempoBase(String(produto.obterTempoBaseMinutos()));
     setEditDescricao(produto.obterDescricao());
+    setErrosEdicaoProduto({});
   };
 
   const handleSalvarEdicaoProduto = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!produtoEditando) return;
-
-    const precoNum = parseFloat(editPreco.replace(',', '.'));
-    const tempoNum = parseInt(editTempoBase, 10) || (editNatureza === 'ESTUFA_RAPIDO' ? 2 : 6);
-
-    if (!editNome.trim() || Number.isNaN(precoNum) || precoNum <= 0) {
-      dispararToast('Verifique os campos', 'Informe um nome válido e preço positivo.', 'aviso');
+    const produto = produtoEditando;
+    if (!produto) {
+      setProdutoEditandoId(null);
+      dispararToast('Produto não encontrado', 'Ele foi removido em outra aba. A lista foi atualizada.', 'aviso');
       return;
     }
 
-    const estrategia =
-      editNatureza === 'ESTUFA_RAPIDO'
-        ? new PreparoRapidoEstufa(tempoNum)
-        : new PreparoNaHoraCozinha(tempoNum, 3);
+    executarAcao('salvar o produto', () => {
+      const resultado = validarEntradaProduto({
+        nome: editNome,
+        descricao: editDescricao,
+        preco: editPreco,
+        categoria: editCategoria,
+        natureza: editNatureza,
+        tempoBase: editTempoBase,
+      });
+      const erros: ErrosCampos<CampoProduto> = resultado.ok ? {} : { ...resultado.erros };
+      if (resultado.ok && nomeJaExiste(resultado.valor.nome, produto.obterId())) {
+        erros.nome = 'Já existe outro produto com esse nome.';
+      }
+      if (!resultado.ok || Object.keys(erros).length > 0) {
+        setErrosEdicaoProduto(erros);
+        return;
+      }
 
-    produtoEditando.atualizarDados({
-      nome: editNome,
-      preco: precoNum,
-      categoria: editCategoria,
-      naturezaPreparo: estrategia,
-      descricao: editDescricao,
+      produto.atualizarDados(resultado.valor);
+      const nomeAtualizado = produto.obterNome();
+      setProdutoEditandoId(null);
+      setErrosEdicaoProduto({});
+      sincronizarInterface();
+
+      dispararToast(
+        'Produto atualizado!',
+        `As alterações em "${nomeAtualizado}" já estão ativas na vitrine do aluno.`,
+        'sucesso'
+      );
     });
+  };
 
-    const nomeAtualizado = produtoEditando.obterNome();
-    setProdutoEditando(null);
-    sincronizarInterface();
+  const handleAlternarDisponibilidade = (produto: Produto) => {
+    executarAcao('alterar a disponibilidade', () => {
+      const ficaraEsgotado = produto.estaDisponivel();
+      produto.definirDisponibilidade(!ficaraEsgotado);
+      sincronizarInterface();
+      dispararToast(
+        ficaraEsgotado
+          ? `${produto.obterNome()} marcado como esgotado`
+          : `${produto.obterNome()} voltou ao cardápio`,
+        ficaraEsgotado
+          ? 'Os alunos não conseguem mais adicioná-lo. Quem já tinha no carrinho será avisado.'
+          : 'Os alunos já podem pedir de novo.',
+        'info'
+      );
+    });
+  };
 
-    dispararToast(
-      'Produto atualizado!',
-      `As alterações em "${nomeAtualizado}" já estão ativas na vitrine do aluno.`,
-      'sucesso'
-    );
+  const handleRestaurarDemonstracao = () => {
+    if (!confirmandoRestauracao) {
+      setConfirmandoRestauracao(true);
+      return;
+    }
+    executarAcao('restaurar os dados de demonstração', () => {
+      const demonstracao = criarDadosIniciaisCantina();
+      gerenciadorPedidos.substituirEstado(
+        demonstracao.gerenciadorInicial.obterTodosPedidos(),
+        demonstracao.gerenciadorInicial.obterSequencialTicket()
+      );
+      carrinho.limpar();
+      setCardapio(demonstracao.cardapioInicial);
+      setPerfilAluno(PERFIL_ALUNO_PADRAO);
+      setPerfilOperador(PERFIL_OPERADOR_PADRAO);
+      setEditandoPerfilAluno(false);
+      setEditandoPerfilOperador(false);
+      setPedidoAcompanhadoId('ped-101');
+      setProdutoEditandoId(null);
+      setDrawerCarrinhoAberto(false);
+      setConfirmandoRestauracao(false);
+      sincronizarInterface();
+      dispararToast(
+        'Dados de demonstração restaurados',
+        'Cardápio, pedidos e perfis voltaram ao estado inicial.',
+        'info'
+      );
+    });
   };
 
   const pedidoRastreado =
     gerenciadorPedidos.buscarPedidoPorId(pedidoAcompanhadoId) ?? todosPedidos[0];
 
-  const qtdPedidosAtivosTotais = todosPedidos.filter(
-    (p) => p.obterStatus() !== 'Entregue'
-  ).length;
+  const qtdPedidosAtivosTotais = todosPedidos.filter((p) => p.estaEmAberto()).length;
+
+  const pedidosKDS = todosPedidos.filter((p) =>
+    filtroStatusKDS === 'TODOS' ? true : p.estaEmAberto()
+  );
 
   return (
     <div
@@ -543,15 +969,23 @@ export default function App() {
       {/* =====================================================================
           TOAST NOTIFICATIONS (Microinterações Fluídas)
           ===================================================================== */}
-      <div className="fixed bottom-5 right-5 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-4 sm:px-0">
+      <div
+        aria-live="polite"
+        aria-atomic="false"
+        className="fixed bottom-5 right-5 z-50 flex flex-col gap-2.5 max-w-sm w-full pointer-events-none px-4 sm:px-0"
+      >
         {toasts.map((t) => (
           <div
             key={t.id}
+            role={t.tipo === 'erro' || t.tipo === 'aviso' ? 'alert' : 'status'}
+            data-tipo-toast={t.tipo}
             className={`pointer-events-auto flex items-start gap-3 p-4 rounded-xl shadow-lg border backdrop-blur-md transition-all duration-200 ${
               t.tipo === 'sucesso'
                 ? 'bg-slate-900/95 text-white border-slate-800'
                 : t.tipo === 'aviso'
                 ? 'bg-amber-950/95 text-amber-100 border-amber-800'
+                : t.tipo === 'erro'
+                ? 'bg-red-950/95 text-red-50 border-red-800'
                 : 'bg-slate-900/95 text-white border-slate-700'
             }`}
           >
@@ -561,11 +995,15 @@ export default function App() {
                   ? 'bg-[#FF6B00] text-white'
                   : t.tipo === 'aviso'
                   ? 'bg-amber-500 text-slate-950'
+                  : t.tipo === 'erro'
+                  ? 'bg-red-500 text-white'
                   : 'bg-emerald-500 text-slate-950'
               }`}
             >
-              {t.tipo === 'aviso' ? (
+              {t.tipo === 'aviso' || t.tipo === 'erro' ? (
                 <AlertTriangle className="w-3.5 h-3.5" />
+              ) : t.tipo === 'info' ? (
+                <Info className="w-3.5 h-3.5" />
               ) : (
                 <Check className="w-3.5 h-3.5" />
               )}
@@ -573,11 +1011,19 @@ export default function App() {
             <div className="flex-1 min-w-0">
               <p className="text-xs font-bold leading-snug">{t.titulo}</p>
               {t.subtitulo && (
-                <p className="text-[11px] text-slate-300 mt-0.5 leading-relaxed">
+                <p className="text-[11px] opacity-80 mt-0.5 leading-relaxed">
                   {t.subtitulo}
                 </p>
               )}
             </div>
+            <button
+              type="button"
+              onClick={() => fecharToast(t.id)}
+              aria-label="Fechar notificação"
+              className="shrink-0 -mr-1 -mt-1 w-6 h-6 rounded-md flex items-center justify-center opacity-60 hover:opacity-100 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
           </div>
         ))}
       </div>
@@ -820,7 +1266,7 @@ export default function App() {
           <div className="bg-white border border-slate-200 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-4">
               <div className="w-11 h-11 rounded-xl bg-orange-50 text-[#FF6B00] flex items-center justify-center font-display font-bold text-base shrink-0">
-                {alunoNome.charAt(0).toUpperCase()}
+                {(alunoNome.charAt(0) || '?').toUpperCase()}
               </div>
 
               {!editandoPerfilAluno ? (
@@ -834,7 +1280,7 @@ export default function App() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setEditandoPerfilAluno(true)}
+                      onClick={iniciarEdicaoAluno}
                       className="text-xs font-semibold text-[#FF6B00] hover:underline cursor-pointer ml-1"
                     >
                       Trocar aluno
@@ -845,27 +1291,52 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    type="text"
-                    value={alunoNome}
-                    onChange={(e) => setAlunoNome(e.target.value)}
-                    placeholder="Nome do Aluno"
-                    className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#FF6B00]"
-                  />
-                  <input
-                    type="text"
-                    value={alunoMatricula}
-                    onChange={(e) => setAlunoMatricula(e.target.value)}
-                    placeholder="Matrícula"
-                    className="w-32 px-3 py-1.5 text-xs font-mono tabular-nums bg-slate-50 border border-slate-300 rounded-lg focus:outline-none focus:border-[#FF6B00]"
-                  />
+                <div
+                  className="flex flex-wrap items-start gap-2"
+                  onKeyDown={aoTeclarNoPerfil(salvarPerfilAluno, cancelarEdicaoAluno)}
+                >
+                  <div>
+                    <input
+                      type="text"
+                      value={rascunhoAluno.nome}
+                      onChange={(e) => setRascunhoAluno((r) => ({ ...r, nome: e.target.value }))}
+                      placeholder="Nome do Aluno"
+                      aria-label="Nome do aluno"
+                      aria-invalid={Boolean(errosAluno.nome)}
+                      aria-describedby={errosAluno.nome ? 'erro-aluno-nome' : undefined}
+                      maxLength={LIMITES.nomePessoa.max}
+                      autoFocus
+                      className={`px-3 py-1.5 text-xs border rounded-lg focus:outline-none ${classeBordaCampo(errosAluno.nome)}`}
+                    />
+                    <MensagemCampo id="erro-aluno-nome" erro={errosAluno.nome} />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      value={rascunhoAluno.matricula}
+                      onChange={(e) => setRascunhoAluno((r) => ({ ...r, matricula: e.target.value }))}
+                      placeholder="Matrícula"
+                      aria-label="Matrícula"
+                      aria-invalid={Boolean(errosAluno.matricula)}
+                      aria-describedby={errosAluno.matricula ? 'erro-aluno-matricula' : undefined}
+                      maxLength={LIMITES.matricula.max}
+                      className={`w-32 px-3 py-1.5 text-xs font-mono tabular-nums border rounded-lg focus:outline-none ${classeBordaCampo(errosAluno.matricula)}`}
+                    />
+                    <MensagemCampo id="erro-aluno-matricula" erro={errosAluno.matricula} />
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setEditandoPerfilAluno(false)}
+                    onClick={salvarPerfilAluno}
                     className="px-3 py-1.5 text-xs font-bold text-white bg-slate-900 rounded-lg hover:bg-[#FF6B00] cursor-pointer"
                   >
                     Salvar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelarEdicaoAluno}
+                    className="px-3 py-1.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 cursor-pointer"
+                  >
+                    Cancelar
                   </button>
                 </div>
               )}
@@ -937,9 +1408,11 @@ export default function App() {
               <div className="relative min-w-[240px] flex-1 sm:flex-initial">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
-                  type="text"
+                  type="search"
                   value={buscaTexto}
                   onChange={(e) => setBuscaTexto(e.target.value)}
+                  maxLength={60}
+                  aria-label="Buscar no cardápio"
                   placeholder="Buscar coxinha, tapioca, café, suco..."
                   className="w-full pl-9 pr-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00] focus:bg-white"
                 />
@@ -965,9 +1438,38 @@ export default function App() {
             </div>
           </div>
 
+          {/* Estado vazio: nenhum produto para os filtros escolhidos */}
+          {produtosVitrine.length === 0 && (
+            <div className="bg-white border border-dashed border-slate-300 rounded-2xl px-6 py-14 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                <SearchX className="w-6 h-6" />
+              </div>
+              <p className="text-sm font-bold text-slate-800">
+                {filtrosVitrineAtivos
+                  ? 'Nenhum item encontrado com esses filtros'
+                  : 'O cardápio está vazio no momento'}
+              </p>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                {filtrosVitrineAtivos
+                  ? 'Tente outra palavra na busca ou mostre todas as categorias.'
+                  : 'A cantina ainda não cadastrou itens. Volte em instantes.'}
+              </p>
+              {filtrosVitrineAtivos && (
+                <button
+                  type="button"
+                  onClick={limparFiltrosVitrine}
+                  className="px-4 py-2 text-xs font-bold text-white bg-[#0F172A] hover:bg-[#FF6B00] rounded-xl cursor-pointer"
+                >
+                  Limpar filtros
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Grid da Vitrine de Produtos */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {produtosVitrine.map((produto) => {
+              const disponivel = produto.estaDisponivel();
               const ehCozinha = produto.utilizaGargaloCozinha();
               const tempoBase = produto.obterTempoBaseMinutos();
               const tempoTotalEstimado = calculadoraGargalo.calcularTempoEstimadoProduto(
@@ -978,7 +1480,9 @@ export default function App() {
               return (
                 <article
                   key={produto.obterId()}
-                  className="group bg-white border border-slate-200 rounded-2xl overflow-hidden flex flex-col justify-between transition-all duration-150 hover:-translate-y-0.5 hover:shadow-md"
+                  className={`group bg-white border border-slate-200 rounded-2xl overflow-hidden flex flex-col justify-between transition-all duration-150 ${
+                    disponivel ? 'hover:-translate-y-0.5 hover:shadow-md' : 'opacity-60'
+                  }`}
                 >
                   <div>
                     <IlustracaoProdutoCantina
@@ -1009,14 +1513,23 @@ export default function App() {
                       </span>
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleAdicionarAoCarrinho(produto)}
-                      className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold text-white bg-[#0F172A] hover:bg-[#FF6B00] rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-                    >
-                      <Plus className="w-4 h-4" />
-                      <span>Adicionar</span>
-                    </button>
+                    {disponivel ? (
+                      <button
+                        type="button"
+                        onClick={() => handleAdicionarAoCarrinho(produto)}
+                        disabled={carrinhoNoLimite}
+                        title={carrinhoNoLimite ? `Limite de ${LIMITES.unidadesPorPedido} unidades por pedido` : undefined}
+                        className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold text-white bg-[#0F172A] hover:bg-[#FF6B00] disabled:bg-slate-300 disabled:cursor-not-allowed rounded-xl transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>Adicionar</span>
+                      </button>
+                    ) : (
+                      <span className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-bold text-slate-500 bg-slate-100 rounded-xl whitespace-nowrap shrink-0">
+                        <Ban className="w-4 h-4" />
+                        <span>Esgotado</span>
+                      </span>
+                    )}
                   </div>
                 </article>
               );
@@ -1079,6 +1592,25 @@ export default function App() {
             ))}
           </div>
 
+          {!pedidoRastreado && (
+            <div className="bg-white border border-dashed border-slate-300 rounded-2xl px-6 py-14 text-center space-y-3">
+              <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                <Receipt className="w-6 h-6" />
+              </div>
+              <p className="text-sm font-bold text-slate-800">Nenhum pedido na fila ainda</p>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                Quando você confirmar um pedido, o andamento e o balcão de retirada aparecem aqui.
+              </p>
+              <button
+                type="button"
+                onClick={() => setModuloAtivo('aluno_vitrine')}
+                className="px-4 py-2 text-xs font-bold text-white bg-[#FF6B00] hover:bg-orange-600 rounded-xl cursor-pointer"
+              >
+                Ver o cardápio
+              </button>
+            </div>
+          )}
+
           {pedidoRastreado && (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
               {/* Progresso Principal e Destaque do Balcão */}
@@ -1127,22 +1659,24 @@ export default function App() {
                     </span>
                   </div>
 
+                  {pedidoRastreado.obterStatus() === 'Cancelado' ? (
+                    <div className="p-4 rounded-xl border border-red-200 bg-red-50 text-red-900 flex items-start gap-3">
+                      <Ban className="w-5 h-5 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-extrabold">Pedido cancelado pela cantina</p>
+                        <p className="text-xs leading-relaxed">
+                          Procure o caixa se tiver dúvidas.
+                          {pedidoRastreado.ehFilaExpressa() &&
+                            ' Como o pagamento foi feito pelo app, o estorno é feito no caixa.'}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-                    {(
-                      [
-                        'Recebido',
-                        'Fazendo',
-                        'Pronto para Retirada',
-                        'Entregue',
-                      ] as const
-                    ).map((etapa, idx) => {
-                      const ordem = [
-                        'Recebido',
-                        'Fazendo',
-                        'Pronto para Retirada',
-                        'Entregue',
-                      ];
-                      const indiceAtual = ordem.indexOf(pedidoRastreado.obterStatus());
+                    {ETAPAS_PEDIDO.map((etapa, idx) => {
+                      const indiceAtual = (ETAPAS_PEDIDO as readonly StatusPedido[]).indexOf(
+                        pedidoRastreado.obterStatus()
+                      );
                       const concluidoOuAtual = idx <= indiceAtual;
                       const ehAtual = idx === indiceAtual;
 
@@ -1172,6 +1706,7 @@ export default function App() {
                       );
                     })}
                   </div>
+                  )}
                 </div>
 
                 {/* Orientação clara de Retirada */}
@@ -1258,13 +1793,15 @@ export default function App() {
                     <span className="text-slate-500">Situação Financeira</span>
                     <span
                       className={`font-bold ${
-                        pedidoRastreado.ehFilaExpressa()
+                        pedidoRastreado.estaPagamentoConfirmado()
                           ? 'text-emerald-700'
                           : 'text-amber-700'
                       }`}
                     >
                       {pedidoRastreado.ehFilaExpressa()
                         ? 'Confirmado no App'
+                        : pedidoRastreado.estaPagamentoConfirmado()
+                        ? 'Pago no Caixa'
                         : 'Pagar na Entrega (Caixa)'}
                     </span>
                   </div>
@@ -1304,7 +1841,7 @@ export default function App() {
                     </span>
                     <button
                       type="button"
-                      onClick={() => setEditandoPerfilOperador(true)}
+                      onClick={iniciarEdicaoOperador}
                       className="text-xs font-semibold text-[#FF6B00] hover:underline cursor-pointer ml-1"
                     >
                       Alterar operador
@@ -1318,25 +1855,52 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <div className="flex flex-wrap items-center gap-2">
-                  <input
-                    type="text"
-                    value={operadorNome}
-                    onChange={(e) => setOperadorNome(e.target.value)}
-                    className="px-3 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg"
-                  />
-                  <input
-                    type="text"
-                    value={operadorId}
-                    onChange={(e) => setOperadorId(e.target.value)}
-                    className="w-24 px-3 py-1.5 text-xs font-mono tabular-nums bg-slate-50 border border-slate-300 rounded-lg"
-                  />
+                <div
+                  className="flex flex-wrap items-start gap-2"
+                  onKeyDown={aoTeclarNoPerfil(salvarPerfilOperador, cancelarEdicaoOperador)}
+                >
+                  <div>
+                    <input
+                      type="text"
+                      value={rascunhoOperador.nome}
+                      onChange={(e) => setRascunhoOperador((r) => ({ ...r, nome: e.target.value }))}
+                      placeholder="Nome do operador"
+                      aria-label="Nome do operador"
+                      aria-invalid={Boolean(errosOperador.nome)}
+                      aria-describedby={errosOperador.nome ? 'erro-operador-nome' : undefined}
+                      maxLength={LIMITES.nomePessoa.max}
+                      autoFocus
+                      className={`px-3 py-1.5 text-xs border rounded-lg focus:outline-none ${classeBordaCampo(errosOperador.nome)}`}
+                    />
+                    <MensagemCampo id="erro-operador-nome" erro={errosOperador.nome} />
+                  </div>
+                  <div>
+                    <input
+                      type="text"
+                      value={rascunhoOperador.id}
+                      onChange={(e) => setRascunhoOperador((r) => ({ ...r, id: e.target.value }))}
+                      placeholder="OP-01"
+                      aria-label="ID do operador"
+                      aria-invalid={Boolean(errosOperador.id)}
+                      aria-describedby={errosOperador.id ? 'erro-operador-id' : undefined}
+                      maxLength={LIMITES.idOperador.max}
+                      className={`w-24 px-3 py-1.5 text-xs font-mono tabular-nums border rounded-lg focus:outline-none ${classeBordaCampo(errosOperador.id)}`}
+                    />
+                    <MensagemCampo id="erro-operador-id" erro={errosOperador.id} />
+                  </div>
                   <button
                     type="button"
-                    onClick={() => setEditandoPerfilOperador(false)}
+                    onClick={salvarPerfilOperador}
                     className="px-3 py-1.5 text-xs font-bold text-white bg-slate-900 rounded-lg cursor-pointer"
                   >
                     Confirmar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelarEdicaoOperador}
+                    className="px-3 py-1.5 text-xs font-bold text-slate-600 bg-slate-100 rounded-lg hover:bg-slate-200 cursor-pointer"
+                  >
+                    Cancelar
                   </button>
                 </div>
               )}
@@ -1397,7 +1961,10 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setFiltroStatusKDS('TODOS')}
+                    onClick={() => {
+                      setFiltroStatusKDS('TODOS');
+                      setPedidoConfirmandoCancelamento(null);
+                    }}
                     className={`px-3 py-1.5 text-xs font-bold rounded-lg cursor-pointer ${
                       filtroStatusKDS === 'TODOS'
                         ? 'bg-white text-slate-900 shadow-2xs'
@@ -1409,14 +1976,27 @@ export default function App() {
                 </div>
               </div>
 
+              {pedidosKDS.length === 0 && (
+                <div className="bg-white border border-dashed border-slate-300 rounded-2xl px-6 py-14 text-center space-y-2">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                    <CheckCircle2 className="w-6 h-6" />
+                  </div>
+                  <p className="text-sm font-bold text-slate-800">
+                    {filtroStatusKDS === 'ATIVOS' ? 'Nenhum pedido em andamento' : 'Nenhum pedido registrado'}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Novos pedidos aparecem aqui assim que os alunos confirmarem.
+                  </p>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {todosPedidos
-                  .filter((p) =>
-                    filtroStatusKDS === 'TODOS' ? true : p.obterStatus() !== 'Entregue'
-                  )
+                {pedidosKDS
                   .map((pedido) => {
                     const status = pedido.obterStatus();
                     const pagoNoApp = pedido.ehFilaExpressa();
+                    const pagamentoConfirmado = pedido.estaPagamentoConfirmado();
+                    const confirmandoCancelamento = pedidoConfirmandoCancelamento === pedido.obterId();
 
                     return (
                       <div
@@ -1452,6 +2032,8 @@ export default function App() {
                                   ? 'bg-orange-100 text-[#FF6B00]'
                                   : status === 'Pronto para Retirada'
                                   ? 'bg-emerald-100 text-emerald-900'
+                                  : status === 'Cancelado'
+                                  ? 'bg-red-100 text-red-800'
                                   : 'bg-slate-100 text-slate-500'
                               }`}
                             >
@@ -1462,12 +2044,12 @@ export default function App() {
                           {/* Etiqueta de Pagamento em Destaque (Verde Pago no App vs Amarelo Pagar no Caixa) */}
                           <div
                             className={`p-3 rounded-xl border text-xs font-extrabold flex items-center gap-2 ${
-                              pagoNoApp
+                              pagamentoConfirmado
                                 ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
                                 : 'bg-amber-50 border-amber-300 text-amber-950'
                             }`}
                           >
-                            {pagoNoApp ? (
+                            {pagamentoConfirmado ? (
                               <BadgeCheck className="w-4 h-4 text-emerald-600 shrink-0" />
                             ) : (
                               <Receipt className="w-4 h-4 text-amber-600 shrink-0" />
@@ -1515,7 +2097,7 @@ export default function App() {
                           {status === 'Recebido' && (
                             <button
                               type="button"
-                              onClick={() => handleAvancarStatusPedido(pedido.obterId())}
+                              onClick={() => handleAvancarStatusPedido(pedido.obterId(), status)}
                               className="w-full py-3 px-4 text-xs font-extrabold text-white bg-[#FF6B00] hover:bg-orange-600 rounded-xl transition-colors cursor-pointer shadow-2xs"
                             >
                               Marcar como Fazendo
@@ -1524,24 +2106,65 @@ export default function App() {
                           {status === 'Fazendo' && (
                             <button
                               type="button"
-                              onClick={() => handleAvancarStatusPedido(pedido.obterId())}
+                              onClick={() => handleAvancarStatusPedido(pedido.obterId(), status)}
                               className="w-full py-3 px-4 text-xs font-extrabold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors cursor-pointer shadow-2xs"
                             >
                               Marcar como Pronto
                             </button>
                           )}
+                          {!pagoNoApp && !pagamentoConfirmado && pedido.estaEmAberto() && (
+                            <button
+                              type="button"
+                              onClick={() => handleConfirmarPagamento(pedido.obterId())}
+                              className="w-full py-2.5 px-4 text-xs font-extrabold text-amber-950 bg-amber-100 hover:bg-amber-200 border border-amber-300 rounded-xl transition-colors cursor-pointer inline-flex items-center justify-center gap-2"
+                            >
+                              <Wallet className="w-4 h-4" />
+                              <span>Registrar pagamento de {formatarMoeda(pedido.obterValorTotal())}</span>
+                            </button>
+                          )}
                           {status === 'Pronto para Retirada' && (
                             <button
                               type="button"
-                              onClick={() => handleAvancarStatusPedido(pedido.obterId())}
-                              className="w-full py-3 px-4 text-xs font-extrabold text-white bg-[#0F172A] hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+                              onClick={() => handleAvancarStatusPedido(pedido.obterId(), status)}
+                              disabled={!pagamentoConfirmado}
+                              title={!pagamentoConfirmado ? 'Registre o pagamento no caixa antes de entregar' : undefined}
+                              className="w-full py-3 px-4 text-xs font-extrabold text-white bg-[#0F172A] hover:bg-slate-800 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-xl transition-colors cursor-pointer"
                             >
-                              Marcar como Entregue
+                              {pagamentoConfirmado ? 'Marcar como Entregue' : 'Aguardando pagamento no caixa'}
                             </button>
                           )}
                           {status === 'Entregue' && (
                             <div className="py-2 text-center text-xs font-bold text-slate-400 bg-slate-50 rounded-xl">
                               Pedido Finalizado e Entregue
+                            </div>
+                          )}
+                          {status === 'Cancelado' && (
+                            <div className="py-2 text-center text-xs font-bold text-red-700 bg-red-50 rounded-xl">
+                              Pedido cancelado
+                            </div>
+                          )}
+                          {pedido.estaEmAberto() && (
+                            <div className="flex items-center justify-end gap-2">
+                              {confirmandoCancelamento && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPedidoConfirmandoCancelamento(null)}
+                                  className="px-2.5 py-1 text-[11px] font-bold text-slate-600 hover:text-slate-900 cursor-pointer"
+                                >
+                                  Manter pedido
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleCancelarPedido(pedido)}
+                                className={`px-2.5 py-1 text-[11px] font-bold rounded-lg cursor-pointer ${
+                                  confirmandoCancelamento
+                                    ? 'text-white bg-red-600 hover:bg-red-700'
+                                    : 'text-slate-400 hover:text-red-700'
+                                }`}
+                              >
+                                {confirmandoCancelamento ? 'Confirmar cancelamento' : 'Cancelar pedido'}
+                              </button>
                             </div>
                           )}
                         </div>
@@ -1566,36 +2189,43 @@ export default function App() {
                   </p>
                 </div>
 
-                <form onSubmit={handleCriarNovoProduto} className="space-y-4">
+                <form onSubmit={handleCriarNovoProduto} noValidate className="space-y-4">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label htmlFor="novo-nome" className="block text-xs font-bold text-slate-700 mb-1">
                       Nome do Item
                     </label>
                     <input
+                      id="novo-nome"
                       type="text"
-                      required
                       value={novoNome}
                       onChange={(e) => setNovoNome(e.target.value)}
+                      maxLength={LIMITES.nomeProduto.max}
+                      aria-invalid={Boolean(errosNovoProduto.nome)}
+                      aria-describedby={errosNovoProduto.nome ? 'erro-novo-nome' : undefined}
                       placeholder="Ex: Enroladinho de Queijo e Presunto"
-                      className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00] focus:bg-white"
+                      className={`w-full px-3.5 py-2.5 text-xs border rounded-xl focus:outline-none ${classeBordaCampo(errosNovoProduto.nome)}`}
                     />
+                    <MensagemCampo id="erro-novo-nome" erro={errosNovoProduto.nome} />
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label htmlFor="novo-preco" className="block text-xs font-bold text-slate-700 mb-1">
                         Preço (R$)
                       </label>
                       <input
-                        type="number"
-                        step="0.10"
-                        min="0.50"
-                        required
+                        id="novo-preco"
+                        type="text"
+                        inputMode="decimal"
                         value={novoPreco}
                         onChange={(e) => setNovoPreco(e.target.value)}
-                        placeholder="Ex: 10.50"
-                        className="w-full px-3.5 py-2.5 text-xs font-mono tabular-nums bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00] focus:bg-white"
+                        maxLength={10}
+                        aria-invalid={Boolean(errosNovoProduto.preco)}
+                        aria-describedby={errosNovoProduto.preco ? 'erro-novo-preco' : undefined}
+                        placeholder="Ex: 10,50"
+                        className={`w-full px-3.5 py-2.5 text-xs font-mono tabular-nums border rounded-xl focus:outline-none ${classeBordaCampo(errosNovoProduto.preco)}`}
                       />
+                      <MensagemCampo id="erro-novo-preco" erro={errosNovoProduto.preco} />
                     </div>
 
                     <div>
@@ -1627,7 +2257,8 @@ export default function App() {
                         onChange={(e) => {
                           const cod = e.target.value as TipoNaturezaCodigo;
                           setNovaNatureza(cod);
-                          setNovoTempoBase(cod === 'ESTUFA_RAPIDO' ? '2' : '6');
+                          setNovoTempoBase(String(LIMITES.tempoBase[cod].padrao));
+                          setErrosNovoProduto((erros) => ({ ...erros, tempoBase: undefined }));
                         }}
                         className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00] focus:bg-white"
                       >
@@ -1637,32 +2268,47 @@ export default function App() {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                      <label htmlFor="novo-tempo" className="block text-xs font-bold text-slate-700 mb-1">
                         Tempo Base (minutos)
                       </label>
                       <input
+                        id="novo-tempo"
                         type="number"
-                        min="1"
-                        max="25"
-                        required
+                        inputMode="numeric"
+                        step="1"
+                        min={LIMITES.tempoBase[novaNatureza].min}
+                        max={LIMITES.tempoBase[novaNatureza].max}
                         value={novoTempoBase}
                         onChange={(e) => setNovoTempoBase(e.target.value)}
-                        className="w-full px-3.5 py-2.5 text-xs font-mono tabular-nums bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00] focus:bg-white"
+                        aria-invalid={Boolean(errosNovoProduto.tempoBase)}
+                        aria-describedby="dica-novo-tempo"
+                        className={`w-full px-3.5 py-2.5 text-xs font-mono tabular-nums border rounded-xl focus:outline-none ${classeBordaCampo(errosNovoProduto.tempoBase)}`}
                       />
+                      {errosNovoProduto.tempoBase ? (
+                        <MensagemCampo id="dica-novo-tempo" erro={errosNovoProduto.tempoBase} />
+                      ) : (
+                        <p id="dica-novo-tempo" className="mt-1 text-[11px] text-slate-400">
+                          De {LIMITES.tempoBase[novaNatureza].min} a {LIMITES.tempoBase[novaNatureza].max} min
+                        </p>
+                      )}
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                    <label htmlFor="nova-descricao" className="block text-xs font-bold text-slate-700 mb-1">
                       Descrição do Produto
                     </label>
                     <input
+                      id="nova-descricao"
                       type="text"
                       value={novaDescricao}
                       onChange={(e) => setNovaDescricao(e.target.value)}
+                      maxLength={LIMITES.descricaoProduto.max}
+                      aria-invalid={Boolean(errosNovoProduto.descricao)}
                       placeholder="Ingredientes e detalhes rápidos..."
-                      className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00] focus:bg-white"
+                      className={`w-full px-3.5 py-2.5 text-xs border rounded-xl focus:outline-none ${classeBordaCampo(errosNovoProduto.descricao)}`}
                     />
+                    <MensagemCampo id="erro-nova-descricao" erro={errosNovoProduto.descricao} />
                   </div>
 
                   <button
@@ -1696,6 +2342,11 @@ export default function App() {
                       <div className="min-w-0 space-y-0.5">
                         <p className="text-sm font-extrabold text-slate-900 truncate">
                           {prod.obterNome()}
+                          {!prod.estaDisponivel() && (
+                            <span className="ml-2 align-middle px-2 py-0.5 rounded-md text-[10px] font-bold text-red-700 bg-red-50 border border-red-200">
+                              Esgotado
+                            </span>
+                          )}
                         </p>
                         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                           <span>{prod.obterCategoria()}</span>
@@ -1722,6 +2373,17 @@ export default function App() {
                         </span>
                         <button
                           type="button"
+                          onClick={() => handleAlternarDisponibilidade(prod)}
+                          className={`px-3 py-2 text-xs font-bold rounded-xl transition-colors cursor-pointer ${
+                            prod.estaDisponivel()
+                              ? 'text-slate-500 hover:text-red-700 hover:bg-red-50'
+                              : 'text-emerald-800 bg-emerald-50 hover:bg-emerald-100'
+                          }`}
+                        >
+                          {prod.estaDisponivel() ? 'Marcar esgotado' : 'Repor'}
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => abrirModalEdicaoProduto(prod)}
                           className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer"
                         >
@@ -1742,8 +2404,18 @@ export default function App() {
           DRAWER LATERAL FLUIDO DO CARRINHO DE COMPRAS & CHECKOUT
           ===================================================================== */}
       {drawerCarrinhoAberto && (
-        <div className="fixed inset-0 z-40 flex justify-end bg-slate-950/50 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-white h-full shadow-2xl flex flex-col justify-between overflow-hidden">
+        <div
+          className="fixed inset-0 z-40 flex justify-end bg-slate-950/50 backdrop-blur-xs"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDrawerCarrinhoAberto(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Carrinho de compras"
+            className="w-full max-w-md bg-white h-full shadow-2xl flex flex-col justify-between overflow-hidden"
+          >
             {/* Cabeçalho do Drawer */}
             <div className="px-6 py-5 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center gap-2.5">
@@ -1761,6 +2433,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setDrawerCarrinhoAberto(false)}
+                aria-label="Fechar carrinho"
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-5 h-5" />
@@ -1783,18 +2456,39 @@ export default function App() {
                 </div>
               ) : (
                 <>
+                  {itensIndisponiveisCarrinho.length > 0 && (
+                    <div role="alert" className="bg-red-50 border border-red-200 rounded-2xl p-4 flex items-start gap-2.5">
+                      <Ban className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="text-xs font-extrabold text-red-900">
+                          Esgotou enquanto você escolhia
+                        </p>
+                        <p className="text-xs text-red-800 leading-relaxed">
+                          Remova {itensIndisponiveisCarrinho.map((i) => i.obterNomeProduto()).join(', ')} para confirmar o pedido.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Lista de Itens com Ajuste de Quantidades (+ e -) */}
                   <div className="divide-y divide-slate-100 border border-slate-200 rounded-2xl px-4">
                     {itensCarrinho.map((item) => {
                       const prod = item.obterProduto();
                       const usaChapa = item.utilizaGargaloCozinha();
+                      const indisponivel = !prod.estaDisponivel();
+                      const noLimiteDoItem =
+                        item.obterQuantidade() >= LIMITES.quantidadePorItem || carrinhoNoLimite;
                       return (
                         <div
                           key={item.obterProdutoId()}
                           className="py-3.5 flex items-center justify-between gap-3"
                         >
                           <div className="min-w-0">
-                            <p className="text-sm font-bold text-slate-900 truncate">
+                            <p
+                              className={`text-sm font-bold truncate ${
+                                indisponivel ? 'text-red-700 line-through' : 'text-slate-900'
+                              }`}
+                            >
                               {item.obterNomeProduto()}
                             </p>
                             <p className="text-xs text-slate-500">
@@ -1819,6 +2513,7 @@ export default function App() {
                                   item.obterQuantidade() - 1
                                 )
                               }
+                              aria-label={`Diminuir ${item.obterNomeProduto()}`}
                               className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-700 hover:bg-slate-100 cursor-pointer"
                             >
                               <Minus className="w-3 h-3" />
@@ -1834,13 +2529,17 @@ export default function App() {
                                   item.obterQuantidade() + 1
                                 )
                               }
-                              className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-700 hover:bg-slate-100 cursor-pointer"
+                              disabled={noLimiteDoItem || indisponivel}
+                              aria-label={`Aumentar ${item.obterNomeProduto()}`}
+                              title={noLimiteDoItem ? 'Limite de unidades atingido' : undefined}
+                              className="w-7 h-7 rounded-lg border border-slate-200 flex items-center justify-center text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
                             >
                               <Plus className="w-3 h-3" />
                             </button>
                             <button
                               type="button"
                               onClick={() => handleRemoverDoCarrinho(item.obterProdutoId())}
+                              aria-label={`Remover ${item.obterNomeProduto()}`}
                               className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-400 hover:text-red-600 hover:bg-red-50 cursor-pointer"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
@@ -1976,10 +2675,15 @@ export default function App() {
                 </span>
               </div>
 
+              {carrinhoNoLimite && (
+                <p className="text-[11px] text-slate-500">
+                  Limite de {LIMITES.unidadesPorPedido} unidades por pedido atingido.
+                </p>
+              )}
               <button
                 type="submit"
-                disabled={itensCarrinho.length === 0}
-                className="w-full py-3.5 px-5 text-sm font-extrabold text-white bg-[#FF6B00] hover:bg-orange-600 disabled:bg-slate-300 rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                disabled={itensCarrinho.length === 0 || itensIndisponiveisCarrinho.length > 0}
+                className="w-full py-3.5 px-5 text-sm font-extrabold text-white bg-[#FF6B00] hover:bg-orange-600 disabled:bg-slate-300 disabled:cursor-not-allowed rounded-xl transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 <span>Confirmar Pedido e Gerar Ticket</span>
                 <ArrowRight className="w-4 h-4" />
@@ -1993,8 +2697,18 @@ export default function App() {
           MODAL DE EDIÇÃO RÁPIDA DE PRODUTO (VISÃO DO VENDEDOR)
           ===================================================================== */}
       {produtoEditando && (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/50 backdrop-blur-xs p-4">
-          <div className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-xl">
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/50 backdrop-blur-xs p-4"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setProdutoEditando(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Editar produto do cardápio"
+            className="bg-white border border-slate-200 rounded-2xl max-w-md w-full p-6 space-y-5 shadow-xl"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <h3 className="text-base font-extrabold text-slate-900 font-display">
                 Editar Produto do Cardápio
@@ -2002,40 +2716,48 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setProdutoEditando(null)}
+                aria-label="Fechar edição"
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleSalvarEdicaoProduto} className="space-y-4">
+            <form onSubmit={handleSalvarEdicaoProduto} noValidate className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label htmlFor="edit-nome" className="block text-xs font-bold text-slate-700 mb-1">
                   Nome do Produto
                 </label>
                 <input
+                  id="edit-nome"
                   type="text"
-                  required
                   value={editNome}
                   onChange={(e) => setEditNome(e.target.value)}
-                  className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00]"
+                  maxLength={LIMITES.nomeProduto.max}
+                  aria-invalid={Boolean(errosEdicaoProduto.nome)}
+                  aria-describedby={errosEdicaoProduto.nome ? 'erro-edit-nome' : undefined}
+                  className={`w-full px-3.5 py-2 text-xs border rounded-xl focus:outline-none ${classeBordaCampo(errosEdicaoProduto.nome)}`}
                 />
+                <MensagemCampo id="erro-edit-nome" erro={errosEdicaoProduto.nome} />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label htmlFor="edit-preco" className="block text-xs font-bold text-slate-700 mb-1">
                     Preço (R$)
                   </label>
                   <input
-                    type="number"
-                    step="0.10"
-                    min="0.50"
-                    required
+                    id="edit-preco"
+                    type="text"
+                    inputMode="decimal"
                     value={editPreco}
                     onChange={(e) => setEditPreco(e.target.value)}
-                    className="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00]"
+                    maxLength={10}
+                    aria-invalid={Boolean(errosEdicaoProduto.preco)}
+                    aria-describedby={errosEdicaoProduto.preco ? 'erro-edit-preco' : undefined}
+                    className={`w-full px-3.5 py-2 text-xs font-mono tabular-nums border rounded-xl focus:outline-none ${classeBordaCampo(errosEdicaoProduto.preco)}`}
                   />
+                  <MensagemCampo id="erro-edit-preco" erro={errosEdicaoProduto.preco} />
                 </div>
 
                 <div>
@@ -2067,7 +2789,8 @@ export default function App() {
                     onChange={(e) => {
                       const cod = e.target.value as TipoNaturezaCodigo;
                       setEditNatureza(cod);
-                      setEditTempoBase(cod === 'ESTUFA_RAPIDO' ? '2' : '6');
+                      setEditTempoBase(String(LIMITES.tempoBase[cod].padrao));
+                      setErrosEdicaoProduto((erros) => ({ ...erros, tempoBase: undefined }));
                     }}
                     className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00]"
                   >
@@ -2077,31 +2800,39 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                  <label htmlFor="edit-tempo" className="block text-xs font-bold text-slate-700 mb-1">
                     Tempo Base (min)
                   </label>
                   <input
+                    id="edit-tempo"
                     type="number"
-                    min="1"
-                    max="25"
-                    required
+                    inputMode="numeric"
+                    step="1"
+                    min={LIMITES.tempoBase[editNatureza].min}
+                    max={LIMITES.tempoBase[editNatureza].max}
                     value={editTempoBase}
                     onChange={(e) => setEditTempoBase(e.target.value)}
-                    className="w-full px-3.5 py-2 text-xs font-mono tabular-nums bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00]"
+                    aria-invalid={Boolean(errosEdicaoProduto.tempoBase)}
+                    className={`w-full px-3.5 py-2 text-xs font-mono tabular-nums border rounded-xl focus:outline-none ${classeBordaCampo(errosEdicaoProduto.tempoBase)}`}
                   />
+                  <MensagemCampo id="erro-edit-tempo" erro={errosEdicaoProduto.tempoBase} />
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
+                <label htmlFor="edit-descricao" className="block text-xs font-bold text-slate-700 mb-1">
                   Descrição
                 </label>
                 <input
+                  id="edit-descricao"
                   type="text"
                   value={editDescricao}
                   onChange={(e) => setEditDescricao(e.target.value)}
-                  className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-[#FF6B00]"
+                  maxLength={LIMITES.descricaoProduto.max}
+                  aria-invalid={Boolean(errosEdicaoProduto.descricao)}
+                  className={`w-full px-3.5 py-2 text-xs border rounded-xl focus:outline-none ${classeBordaCampo(errosEdicaoProduto.descricao)}`}
                 />
+                <MensagemCampo id="erro-edit-descricao" erro={errosEdicaoProduto.descricao} />
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2">
@@ -2128,7 +2859,33 @@ export default function App() {
       <footer className="bg-white border-t border-slate-200 px-6 py-4 mt-auto">
         <div className="max-w-[1360px] mx-auto flex flex-wrap items-center justify-between gap-4 text-xs text-slate-500">
           <span>Fast-Track Cantina · Autoatendimento &amp; Operação CESAR School</span>
-          <span>Intervalo Inteligente · Retirada Expressa &amp; KDS Integrado</span>
+          <div className="flex flex-wrap items-center gap-3">
+            {confirmandoRestauracao && (
+              <button
+                type="button"
+                onClick={() => setConfirmandoRestauracao(false)}
+                className="font-semibold text-slate-500 hover:text-slate-900 cursor-pointer"
+              >
+                Manter dados atuais
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={handleRestaurarDemonstracao}
+              className={`inline-flex items-center gap-1.5 font-semibold rounded-lg cursor-pointer ${
+                confirmandoRestauracao
+                  ? 'px-3 py-1.5 text-white bg-red-600 hover:bg-red-700'
+                  : 'text-slate-500 hover:text-slate-900'
+              }`}
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>
+                {confirmandoRestauracao
+                  ? 'Confirmar: apagar pedidos e voltar à demonstração'
+                  : 'Restaurar dados de demonstração'}
+              </span>
+            </button>
+          </div>
         </div>
       </footer>
     </div>
