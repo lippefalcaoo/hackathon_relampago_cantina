@@ -15,6 +15,39 @@ O sistema é dividido em duas visões integradas em tempo real:
 - **Domínio:** classes TypeScript orientadas a objetos (`src/domain`), com padrão Strategy para natureza de preparo e forma de pagamento
 - **Armazenamento:** `localStorage` do navegador (`src/infra`), com sincronização automática entre abas
 
+  >Justificativa
+- React 19: utilizado na construção das interfaces interativas, permitindo organizar a aplicação em componentes reutilizáveis e facilitar a manutenção das diferentes telas.
+
+- TypeScript: utilizado na implementação das classes de domínio e regras de negócio, oferecendo tipagem estática e maior segurança no tratamento dos dados.
+
+- Vite: utilizado como ferramenta de desenvolvimento e build, proporcionando um ambiente de desenvolvimento rápido e geração dos arquivos para execução da aplicação.
+
+- Tailwind CSS 4: utilizado na estilização das interfaces por meio de classes utilitárias, facilitando a criação e padronização dos elementos visuais.
+
+- localStorage: utilizado para persistência local dos dados no navegador, dispensando a configuração de um banco de dados externo para esta prova de conceito.
+
+- Lucide React: utilizado para fornecer ícones personalizáveis nos elementos da interface.
+
+- Motion: utilizado para implementar animações e transições nos componentes da aplicação.
+
+A stack atende à proposta de uma aplicação web interativa, permitindo desenvolver as interfaces, implementar regras de negócio e persistir os dados localmente, sem a necessidade de uma infraestrutura de backend para esta PoC.
+
+## 🧩 Onde estão os princípios de projeto?
+
+Os princípios do capítulo 5 de *Engenharia de Software Moderna* foram aplicados principalmente na organização das classes de domínio, no encapsulamento das regras de negócio e na utilização de interfaces para reduzir o acoplamento entre componentes.
+
+| Princípio | Onde encontrar no código | Aplicação no projeto |
+|---|---|---|
+| **Responsabilidade Única (SRP)** | `src/domain/cantinaDomain.ts` — `Produto`, `Pedido` e `CalculadoraGargaloFila` | As classes possuem responsabilidades distintas, como gerenciamento dos produtos, controle dos pedidos e cálculo da estimativa de espera, favorecendo a coesão e a manutenção. |
+| **Ocultamento de Informação** | `src/domain/cantinaDomain.ts` — `Produto`, `Carrinho` e `Pedido` | Os atributos internos são protegidos com `private`, permitindo que alterações ocorram por métodos que preservam as regras de negócio. |
+| **Coesão** | `src/domain/cantinaDomain.ts` — `Carrinho`, `Pedido` e `GerenciadorPedidos` | Os métodos de cada classe estão relacionados à sua responsabilidade. Por exemplo, `Carrinho` concentra as operações de gerenciamento dos itens e cálculo dos valores. |
+| **Inversão de Dependências (DIP)** | `src/domain/cantinaDomain.ts` — `ProcessadorCheckout` e `NaturezaPreparo` | O sistema utiliza interfaces para definir contratos de pagamento e preparo, permitindo diferentes implementações sem depender diretamente de classes concretas. |
+| **Composição em vez de Herança** | `src/domain/cantinaDomain.ts` — `Produto`, `ItemCarrinho` e `Pedido` | Os objetos são construídos a partir de outros objetos, permitindo combinar responsabilidades e comportamentos sem depender de hierarquias de herança. |
+| **Aberto/Fechado (OCP)** | `src/domain/cantinaDomain.ts` — `ProcessadorCheckout`, `PagamentoOnlineApp` e `PagamentoPresencialLoja` | As formas de pagamento são implementadas separadamente por meio de uma interface, permitindo adicionar novas estratégias sem modificar diretamente a lógica de finalização dos pedidos. |
+| **Substituição de Liskov (LSP)** | `src/domain/cantinaDomain.ts` — `NaturezaPreparo` e `ProcessadorCheckout` | As diferentes implementações seguem os contratos de suas interfaces, podendo ser utilizadas nos mesmos pontos do sistema. |
+| **Integridade Conceitual** | `src/domain/cantinaDomain.ts` — `ETAPAS_PEDIDO`, `LIMITES` e classes de domínio; `src/domain/erros.ts` | As regras, os estados e os limites são centralizados, mantendo soluções e convenções consistentes ao longo do sistema. |
+
+**Observação:** Os princípios são demonstrados principalmente na camada de domínio (`src/domain`). A camada de persistência está organizada separadamente em `src/infra/persistenciaCantina.ts`.
 ## 🛡️ Robustez e tratamento de erros
 
 - **Erros de domínio tipados** (`src/domain/erros.ts`): validação, regra de negócio, conflito e não encontrado. A interface mostra mensagens claras e nunca expõe detalhes técnicos ao usuário.
@@ -49,3 +82,15 @@ O sistema é dividido em duas visões integradas em tempo real:
 npm test       # testes do domínio e da persistência
 npm run lint   # checagem de tipos
 ```
+## Equipe e responsabilidades
+
+| Integrante | Papel e responsabilidades |
+|---|---|
+| **Filipe Falcão** | Líder de desenvolvimento: coordenação das atividades técnicas e acompanhamento do desenvolvimento do projeto. |
+| **Aurea Patrícia** | Design e desenvolvimento da interface: participação na concepção visual e organização dos elementos da interface. |
+| **Brenda Paiva** | Design e desenvolvimento da interface: participação na concepção visual e organização dos elementos da interface. |
+| **Brenna Lyra** | Documentação do projeto, elaboração do README, organização da entrega do vídeo e participação no processo de ideação. |
+| **Ardilles Felix** | Produção e edição do vídeo de apresentação do projeto. |
+| **Lucas Vinícius** | Desenvolvimento e revisão do código. |
+| **Gabriel Pimentel** | Desenvolvimento e revisão do código. |
+| **Manoel Messias** | Desenvolvimento e revisão do código. |
