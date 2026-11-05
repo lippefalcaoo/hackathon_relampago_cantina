@@ -21,6 +21,8 @@ import {
   PreparoRapidoEstufa,
   Produto,
   criarCardapioInicial,
+  criarCardapioRealCantina,
+  CATEGORIAS_CARDAPIO_REAL,
   criarDadosIniciaisCantina,
   descreverErro,
   lerNumero,
@@ -246,3 +248,32 @@ test('Pedido.restaurar recusa status e pagamento desconhecidos', () => {
     ErroValidacao
   );
 });
+
+test('Cardápio Real da Entrega 2 carrega todos os 44 itens nas 8 categorias oficiais', () => {
+  const cardapioReal = criarCardapioRealCantina();
+  assert.equal(cardapioReal.length, 44);
+  const categoriasPresentes = new Set(cardapioReal.map((p) => p.obterCategoria()));
+  assert.deepEqual([...categoriasPresentes], [...CATEGORIAS_CARDAPIO_REAL]);
+});
+
+test('Previsão Inteligente registra timestamps de Em Preparo e Pronto para Retirada e calcula média móvel', () => {
+  const { tapioca } = cardapio();
+  const carrinho = new Carrinho();
+  carrinho.adicionarProduto(tapioca);
+  const ger = new GerenciadorPedidos();
+  const p = ger.finalizarPedido(aluno, carrinho, app, calc);
+
+  const tInicio = 1_700_000_000_000;
+  const tPronto = tInicio + 6 * 60 * 1000; // 6 minutos reais
+
+  ger.avancarStatusPedido(p.obterId(), 'Op', 'Recebido', tInicio);
+  assert.equal(p.obterIniciadoPreparoEm(), tInicio);
+
+  ger.avancarStatusPedido(p.obterId(), 'Op', 'Fazendo', tPronto);
+  assert.equal(p.obterProntoParaRetiradaEm(), tPronto);
+  assert.equal(p.obterTempoRealPreparoMinutos(), 6);
+
+  const media = calc.calcularMediaMovelPreparo(ger.obterTodosPedidos(), ger.obterHistoricoTemposReaisMinutos());
+  assert.equal(media, 6);
+});
+

@@ -11,7 +11,22 @@ export * from './erros';
    Tipos e constantes do domínio
    ========================================================================== */
 
-export const CATEGORIAS_PRODUTO = ['Salgados', 'Lanches na Chapa', 'Bebidas', 'Doces'] as const;
+export const CATEGORIAS_CARDAPIO_REAL = [
+  'Salgados',
+  'Sanduíches Naturais',
+  'Hot Dog',
+  'Sobremesas',
+  'Bebidas',
+  'Tapiocas',
+  'Croissant',
+  'Cuscuz Recheado',
+] as const;
+
+export const CATEGORIAS_PRODUTO = [
+  ...CATEGORIAS_CARDAPIO_REAL,
+  'Lanches na Chapa',
+  'Doces',
+] as const;
 export type CategoriaProduto = (typeof CATEGORIAS_PRODUTO)[number];
 
 export const NATUREZAS_PREPARO = ['ESTUFA_RAPIDO', 'COZINHA_NA_HORA'] as const;
@@ -925,11 +940,17 @@ export interface PedidoSerializado {
   horarioCriacao: string;
   ultimoOperador: string;
   pagamentoConfirmado: boolean;
+  iniciadoPreparoEm?: number;
+  prontoParaRetiradaEm?: number;
+  tempoRealPreparoMinutos?: number;
 }
 
 export interface OpcoesPedido {
   pagamentoConfirmado?: boolean;
   ultimoOperador?: string;
+  iniciadoPreparoEm?: number;
+  prontoParaRetiradaEm?: number;
+  tempoRealPreparoMinutos?: number;
 }
 
 export class Pedido {
@@ -944,6 +965,9 @@ export class Pedido {
   private status: StatusPedido;
   private ultimoOperadorResponsavel: string;
   private pagamentoConfirmado: boolean;
+  private iniciadoPreparoEm?: number;
+  private prontoParaRetiradaEm?: number;
+  private tempoRealPreparoMinutos?: number;
 
   constructor(
     id: string,
@@ -988,6 +1012,20 @@ export class Pedido {
     this.horarioCriacao =
       textoLimpo(horarioCriacao) ||
       new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+    if (typeof opcoes.iniciadoPreparoEm === 'number' && Number.isFinite(opcoes.iniciadoPreparoEm)) {
+      this.iniciadoPreparoEm = opcoes.iniciadoPreparoEm;
+    }
+    if (typeof opcoes.prontoParaRetiradaEm === 'number' && Number.isFinite(opcoes.prontoParaRetiradaEm)) {
+      this.prontoParaRetiradaEm = opcoes.prontoParaRetiradaEm;
+    }
+    if (
+      typeof opcoes.tempoRealPreparoMinutos === 'number' &&
+      Number.isFinite(opcoes.tempoRealPreparoMinutos) &&
+      opcoes.tempoRealPreparoMinutos > 0
+    ) {
+      this.tempoRealPreparoMinutos = opcoes.tempoRealPreparoMinutos;
+    }
   }
 
   private garantirStatusEsperado(statusEsperado?: StatusPedido): void {
@@ -1006,17 +1044,35 @@ export class Pedido {
   /**
    * Avança uma etapa. `statusEsperado` evita que um duplo clique (ou outra aba)
    * pule etapas: se o pedido já mudou, a ação é recusada com ErroConflito.
+   * Registra Date.now() ao entrar em "Fazendo" (Em Preparo) e ao mudar para
+   * "Pronto para Retirada", calculando o tempo real de preparo.
    */
-  public avancarStatus(nomeOperador?: string, statusEsperado?: StatusPedido): StatusPedido {
+  public avancarStatus(
+    nomeOperador?: string,
+    statusEsperado?: StatusPedido,
+    agoraMs: number = Date.now()
+  ): StatusPedido {
     this.garantirStatusEsperado(statusEsperado);
     const ticket = this.obterCodigoTicket();
 
     switch (this.status) {
       case 'Recebido':
         this.status = 'Fazendo';
+        this.iniciadoPreparoEm = agoraMs;
         break;
       case 'Fazendo':
         this.status = 'Pronto para Retirada';
+        this.prontoParaRetiradaEm = agoraMs;
+        if (this.iniciadoPreparoEm !== undefined && agoraMs >= this.iniciadoPreparoEm) {
+          const decorridoMinutos = (agoraMs - this.iniciadoPreparoEm) / 60000;
+          // Mantém 1 casa decimal se for rápido (< 1 min em teste) ou arredonda, mínimo 0.5 min
+          this.tempoRealPreparoMinutos = Math.max(
+            1,
+            Math.round(decorridoMinutos >= 1 ? decorridoMinutos : 1)
+          );
+        } else {
+          this.tempoRealPreparoMinutos = this.tempoEstimadoNoFechamentoMinutos;
+        }
         break;
       case 'Pronto para Retirada':
         if (!this.pagamentoConfirmado) {
@@ -1077,7 +1133,7 @@ export class Pedido {
   }
 
   public serializar(): PedidoSerializado {
-    return {
+    const base: PedidoSerializado = {
       id: this.id,
       aluno: { nome: this.alunoNome, matricula: this.alunoMatricula },
       itens: this.itens.map((item) => item.serializar()),
@@ -1089,6 +1145,12 @@ export class Pedido {
       ultimoOperador: this.ultimoOperadorResponsavel,
       pagamentoConfirmado: this.pagamentoConfirmado,
     };
+    if (this.iniciadoPreparoEm !== undefined) base.iniciadoPreparoEm = this.iniciadoPreparoEm;
+    if (this.prontoParaRetiradaEm !== undefined) base.prontoParaRetiradaEm = this.prontoParaRetiradaEm;
+    if (this.tempoRealPreparoMinutos !== undefined) {
+      base.tempoRealPreparoMinutos = this.tempoRealPreparoMinutos;
+    }
+    return base;
   }
 
   public static restaurar(dados: unknown): Pedido {
@@ -1108,6 +1170,14 @@ export class Pedido {
         pagamentoConfirmado:
           typeof dados.pagamentoConfirmado === 'boolean' ? dados.pagamentoConfirmado : undefined,
         ultimoOperador: typeof dados.ultimoOperador === 'string' ? dados.ultimoOperador : undefined,
+        iniciadoPreparoEm:
+          typeof dados.iniciadoPreparoEm === 'number' ? dados.iniciadoPreparoEm : undefined,
+        prontoParaRetiradaEm:
+          typeof dados.prontoParaRetiradaEm === 'number' ? dados.prontoParaRetiradaEm : undefined,
+        tempoRealPreparoMinutos:
+          typeof dados.tempoRealPreparoMinutos === 'number'
+            ? dados.tempoRealPreparoMinutos
+            : undefined,
       }
     );
   }
@@ -1175,6 +1245,29 @@ export class Pedido {
     return this.tempoEstimadoNoFechamentoMinutos;
   }
 
+  public obterIniciadoPreparoEm(): number | undefined {
+    return this.iniciadoPreparoEm;
+  }
+
+  public obterProntoParaRetiradaEm(): number | undefined {
+    return this.prontoParaRetiradaEm;
+  }
+
+  public obterTempoRealPreparoMinutos(): number | undefined {
+    return this.tempoRealPreparoMinutos;
+  }
+
+  public obterDuracaoRealSegundos(): number | undefined {
+    if (
+      this.iniciadoPreparoEm !== undefined &&
+      this.prontoParaRetiradaEm !== undefined &&
+      this.prontoParaRetiradaEm >= this.iniciadoPreparoEm
+    ) {
+      return Math.round((this.prontoParaRetiradaEm - this.iniciadoPreparoEm) / 1000);
+    }
+    return undefined;
+  }
+
   public obterHorarioCriacao(): string {
     return this.horarioCriacao;
   }
@@ -1189,7 +1282,7 @@ export class Pedido {
 }
 
 /* ==========================================================================
-   Cálculo de gargalo da cozinha
+   Cálculo de gargalo da cozinha e Previsão Inteligente por Média Móvel
    ========================================================================== */
 
 export interface DiagnosticoCarrinho {
@@ -1198,10 +1291,47 @@ export interface DiagnosticoCarrinho {
   tempoTotalEstimadoMinutos: number;
   ultrapassaLimiteSeguranca: boolean;
   pedidosAtivosNaChapa: number;
+  mediaMovelPreparoMinutos: number | null;
 }
 
 export class CalculadoraGargaloFila {
   private readonly limiteAlertaIntervaloMinutos: number = 12;
+  private readonly janelaMediaMovel: number = 5;
+
+  /**
+   * Extrai os tempos reais de preparo dos últimos pedidos que já ficaram prontos
+   * e calcula a média móvel (em minutos) para refinar a estimativa dinâmica.
+   */
+  public calcularMediaMovelPreparo(
+    pedidos: Pedido[],
+    historicoExtra: number[] = []
+  ): number | null {
+    const temposMedidos = pedidos
+      .map((p) => p.obterTempoRealPreparoMinutos())
+      .filter((t): t is number => typeof t === 'number' && Number.isFinite(t) && t > 0);
+
+    const combinados = [...temposMedidos, ...historicoExtra].slice(0, this.janelaMediaMovel);
+    if (combinados.length === 0) return null;
+
+    const soma = combinados.reduce((acc, val) => acc + val, 0);
+    return Math.max(1, Math.round(soma / combinados.length));
+  }
+
+  /**
+   * Retorna a "Previsão baseada no movimento atual" (em minutos), combinando
+   * a média móvel real dos últimos pedidos finalizados com o movimento ativo na fila.
+   */
+  public obterPrevisaoMovimentoAtualMinutos(
+    pedidos: Pedido[],
+    historicoExtra: number[] = []
+  ): number {
+    const mediaReal = this.calcularMediaMovelPreparo(pedidos, historicoExtra);
+    const gargaloAtivo = this.calcularMinutosGargaloCozinha(pedidos);
+    if (mediaReal !== null) {
+      return Math.max(1, Math.round((mediaReal + Math.max(2, gargaloAtivo)) / 2));
+    }
+    return Math.max(2, gargaloAtivo || 4);
+  }
 
   public calcularMinutosGargaloCozinha(pedidos: Pedido[]): number {
     let cargaAcumuladaMinutos = 0;
@@ -1216,16 +1346,33 @@ export class CalculadoraGargaloFila {
     return pedidos.filter((p) => p.estaAtivoNaCozinha() && p.contemItensCozinha()).length;
   }
 
-  public calcularTempoEstimadoProduto(produto: Produto, pedidosAtivos: Pedido[]): number {
+  public calcularTempoEstimadoProduto(
+    produto: Produto,
+    pedidosAtivos: Pedido[],
+    historicoTemposReais: number[] = []
+  ): number {
     const tempoBase = produto.obterTempoBaseMinutos();
     if (!produto.utilizaGargaloCozinha()) return tempoBase;
-    return tempoBase + this.calcularMinutosGargaloCozinha(pedidosAtivos);
+
+    const gargaloFila = this.calcularMinutosGargaloCozinha(pedidosAtivos);
+    const mediaMovel = this.calcularMediaMovelPreparo(pedidosAtivos, historicoTemposReais);
+
+    if (mediaMovel !== null) {
+      // Pondera o tempo base + fila com o ritmo real medido pela média móvel da cozinha
+      return Math.max(1, Math.round((tempoBase + gargaloFila + mediaMovel) / 2));
+    }
+    return tempoBase + gargaloFila;
   }
 
-  public diagnosticarCarrinho(carrinho: Carrinho, pedidosAtivos: Pedido[]): DiagnosticoCarrinho {
+  public diagnosticarCarrinho(
+    carrinho: Carrinho,
+    pedidosAtivos: Pedido[],
+    historicoTemposReais: number[] = []
+  ): DiagnosticoCarrinho {
     const itens = carrinho.obterItens();
     const gargaloCozinhaAtual = this.calcularMinutosGargaloCozinha(pedidosAtivos);
     const pedidosNaChapa = this.contarPedidosAtivosNaCozinha(pedidosAtivos);
+    const mediaMovel = this.calcularMediaMovelPreparo(pedidosAtivos, historicoTemposReais);
 
     if (itens.length === 0) {
       return {
@@ -1234,6 +1381,7 @@ export class CalculadoraGargaloFila {
         tempoTotalEstimadoMinutos: 0,
         ultrapassaLimiteSeguranca: false,
         pedidosAtivosNaChapa: pedidosNaChapa,
+        mediaMovelPreparoMinutos: mediaMovel,
       };
     }
 
@@ -1250,7 +1398,12 @@ export class CalculadoraGargaloFila {
 
     const tempoBaseItens = Math.round(maiorTempoBase + cargaIncrementalProprioCarrinho);
     const acrescimo = usaCozinha ? gargaloCozinhaAtual : 0;
-    const tempoTotal = tempoBaseItens + acrescimo;
+    const tempoBruto = tempoBaseItens + acrescimo;
+
+    const tempoTotal =
+      usaCozinha && mediaMovel !== null
+        ? Math.max(1, Math.round((tempoBruto + mediaMovel) / 2))
+        : tempoBruto;
 
     return {
       tempoBaseItens,
@@ -1258,6 +1411,7 @@ export class CalculadoraGargaloFila {
       tempoTotalEstimadoMinutos: tempoTotal,
       ultrapassaLimiteSeguranca: tempoTotal > this.limiteAlertaIntervaloMinutos,
       pedidosAtivosNaChapa: pedidosNaChapa,
+      mediaMovelPreparoMinutos: mediaMovel,
     };
   }
 }
@@ -1279,6 +1433,7 @@ export interface EstadoPedidosSerializado {
 export class GerenciadorPedidos {
   private pedidos: Pedido[] = [];
   private sequencialTicket: number = 102;
+  private historicoTemposReaisMinutos: number[] = [];
 
   constructor(pedidosIniciais: Pedido[] = [], sequencialInicial: number = 102) {
     this.substituirEstado(pedidosIniciais, sequencialInicial);
@@ -1295,6 +1450,18 @@ export class GerenciadorPedidos {
     const maiorExistente = this.pedidos.reduce((maior, p) => Math.max(maior, numeroDoPedido(p)), 0);
     const informado = Number.isInteger(sequencialTicket) && sequencialTicket > 0 ? sequencialTicket : 0;
     this.sequencialTicket = Math.max(informado, maiorExistente);
+    this.recalcularHistoricoTemposReais();
+  }
+
+  private recalcularHistoricoTemposReais(): void {
+    const medidos = this.pedidos
+      .map((p) => p.obterTempoRealPreparoMinutos())
+      .filter((t): t is number => typeof t === 'number' && Number.isFinite(t) && t > 0);
+    this.historicoTemposReaisMinutos = medidos;
+  }
+
+  public obterHistoricoTemposReaisMinutos(): number[] {
+    return [...this.historicoTemposReaisMinutos];
   }
 
   public finalizarPedido(
@@ -1331,7 +1498,11 @@ export class GerenciadorPedidos {
     while (this.buscarPedidoPorId(`ped-${proximoNumero}`)) proximoNumero += 1;
 
     const valorTotal = carrinho.calcularValorTotal();
-    const diagnosticoTempo = calculadoraGargalo.diagnosticarCarrinho(carrinho, this.pedidos);
+    const diagnosticoTempo = calculadoraGargalo.diagnosticarCarrinho(
+      carrinho,
+      this.pedidos,
+      this.historicoTemposReaisMinutos
+    );
     const resultadoCheckout = processadorCheckout.processarCheckout(valorTotal, proximoNumero);
     const novoPedido = new Pedido(
       `ped-${proximoNumero}`,
@@ -1357,9 +1528,23 @@ export class GerenciadorPedidos {
     return pedido;
   }
 
-  public avancarStatusPedido(pedidoId: string, operadorNome: string, statusEsperado?: StatusPedido): Pedido {
+  public avancarStatusPedido(
+    pedidoId: string,
+    operadorNome: string,
+    statusEsperado?: StatusPedido,
+    agoraMs: number = Date.now()
+  ): Pedido {
     const pedido = this.exigirPedido(pedidoId);
-    pedido.avancarStatus(operadorNome, statusEsperado);
+    const novoStatus = pedido.avancarStatus(operadorNome, statusEsperado, agoraMs);
+    if (novoStatus === 'Pronto para Retirada') {
+      const tempoReal = pedido.obterTempoRealPreparoMinutos();
+      if (tempoReal !== undefined) {
+        this.historicoTemposReaisMinutos = [
+          tempoReal,
+          ...this.historicoTemposReaisMinutos,
+        ].slice(0, 20);
+      }
+    }
     return pedido;
   }
 
@@ -1540,3 +1725,224 @@ export function criarDadosIniciaisCantina(): {
     processadoresDisponiveis: [pagamentoApp, pagamentoLoja],
   };
 }
+
+/* ==========================================================================
+   Cardápio Real da Cantina (Entrega 2 - 8 Categorias / 41 Itens)
+   ========================================================================== */
+
+export interface GrupoCardapioRealBruto {
+  categoria: CategoriaProduto;
+  itens: { nome: string; preco: number }[];
+}
+
+export const CARDAPIO_REAL_BRUTO: readonly GrupoCardapioRealBruto[] = [
+  {
+    categoria: 'Salgados',
+    itens: [
+      { nome: 'Coxinha de Frango', preco: 12.0 },
+      { nome: 'Coxinha de Batata-Doce com Frango', preco: 12.0 },
+      { nome: 'Coxinha de Frango com Requeijão', preco: 14.0 },
+      { nome: 'Enroladinho de Salsicha', preco: 9.5 },
+      { nome: 'Coxinha de Camarão com Requeijão', preco: 18.0 },
+      { nome: 'Empada de Camarão', preco: 15.0 },
+      { nome: 'Coxinha de Charque com Requeijão', preco: 16.0 },
+      { nome: 'Empada de Queijo do Reino', preco: 19.0 },
+      { nome: 'Mini Coxinha (porção)', preco: 13.0 },
+      { nome: 'Empada de Frango com Requeijão', preco: 14.0 },
+      { nome: 'Mini Coxinha (copo)', preco: 39.9 },
+      { nome: 'Pizza Brotinho', preco: 16.0 },
+      { nome: 'Pão de Metro', preco: 15.0 },
+      { nome: 'Esfirra', preco: 15.0 },
+    ],
+  },
+  {
+    categoria: 'Sanduíches Naturais',
+    itens: [
+      { nome: 'Sanduíche Natural de Frango', preco: 12.5 },
+      { nome: 'Sanduíche Natural de Ricota', preco: 12.5 },
+      { nome: 'Sanduíche Natural de Atum', preco: 12.5 },
+    ],
+  },
+  {
+    categoria: 'Hot Dog',
+    itens: [
+      { nome: 'Hot Dog à Bolonhesa', preco: 15.0 },
+      { nome: 'Hot Dog ao Molho de Queijo', preco: 15.0 },
+    ],
+  },
+  {
+    categoria: 'Sobremesas',
+    itens: [
+      { nome: 'Bolo de Rolo (Fatia)', preco: 8.5 },
+      { nome: 'Bolo Cenoura com Chocolate (Fatia)', preco: 9.5 },
+      { nome: 'Bolo Vulcão (Fatia)', preco: 9.5 },
+      { nome: 'Bolo de Noiva (Fatia)', preco: 15.5 },
+      { nome: 'Bolo Pistache', preco: 15.9 },
+      { nome: 'Pudim de Leite', preco: 12.5 },
+      { nome: 'Salada de Frutas', preco: 12.0 },
+      { nome: 'Brownie Vó Carminha', preco: 7.5 },
+    ],
+  },
+  {
+    categoria: 'Bebidas',
+    itens: [
+      { nome: 'Suco OQ', preco: 10.0 },
+      { nome: 'Suco Recife', preco: 7.5 },
+      { nome: 'Água Mineral', preco: 5.0 },
+      { nome: 'Refrigerante Lata', preco: 8.0 },
+      { nome: 'Água de Coco', preco: 6.0 },
+      { nome: 'Red Bull', preco: 15.0 },
+    ],
+  },
+  {
+    categoria: 'Tapiocas',
+    itens: [
+      { nome: 'Tapioca de Queijo', preco: 12.0 },
+      { nome: 'Tapioca de Carne de Sol com Queijo', preco: 18.9 },
+      { nome: 'Tapioca de Frango com Requeijão', preco: 16.9 },
+    ],
+  },
+  {
+    categoria: 'Croissant',
+    itens: [
+      { nome: 'Croissant Simples', preco: 11.0 },
+      { nome: 'Croissant Frango com Requeijão', preco: 17.5 },
+      { nome: 'Croissant Queijo Mussarela', preco: 15.9 },
+      { nome: 'Croissant Carne de Sol com Queijo', preco: 17.5 },
+      { nome: 'Croissant Queijo do Reino', preco: 18.9 },
+    ],
+  },
+  {
+    categoria: 'Cuscuz Recheado',
+    itens: [
+      { nome: 'Cuscuz com Queijo', preco: 14.0 },
+      { nome: 'Cuscuz com Leite', preco: 14.0 },
+      { nome: 'Cuscuz Carne do Sol com Queijo', preco: 16.5 },
+    ],
+  },
+];
+
+function criarNaturezaPorCategoriaReal(categoria: CategoriaProduto): NaturezaPreparo {
+  switch (categoria) {
+    case 'Tapiocas':
+      return new PreparoNaHoraCozinha(6, 3);
+    case 'Cuscuz Recheado':
+      return new PreparoNaHoraCozinha(6, 3);
+    case 'Hot Dog':
+      return new PreparoNaHoraCozinha(4, 2);
+    case 'Croissant':
+      return new PreparoRapidoEstufa(2);
+    case 'Salgados':
+      return new PreparoRapidoEstufa(2);
+    case 'Sanduíches Naturais':
+    case 'Sobremesas':
+    case 'Bebidas':
+    default:
+      return new PreparoRapidoEstufa(1);
+  }
+}
+
+export function criarCardapioRealCantina(): Produto[] {
+  const produtos: Produto[] = [];
+  let seq = 1;
+  for (const grupo of CARDAPIO_REAL_BRUTO) {
+    for (const item of grupo.itens) {
+      produtos.push(
+        new Produto({
+          id: `real-${seq++}`,
+          nome: item.nome,
+          descricao:
+            grupo.categoria === 'Tapiocas' ||
+            grupo.categoria === 'Cuscuz Recheado' ||
+            grupo.categoria === 'Hot Dog'
+              ? 'Preparado na hora na cozinha da cantina.'
+              : 'Pronto na vitrine/estufa para retirada rápida.',
+          preco: item.preco,
+          categoria: grupo.categoria,
+          naturezaPreparo: criarNaturezaPorCategoriaReal(grupo.categoria),
+          disponivel: true,
+        })
+      );
+    }
+  }
+  return produtos;
+}
+
+export function criarDadosReaisCantina(): {
+  cardapioInicial: Produto[];
+  gerenciadorInicial: GerenciadorPedidos;
+  processadoresDisponiveis: ProcessadorCheckout[];
+} {
+  const cardapioInicial = criarCardapioRealCantina();
+  const pagamentoApp = new PagamentoOnlineApp();
+  const pagamentoLoja = new PagamentoPresencialLoja();
+
+  const buscarPorNome = (nome: string): Produto =>
+    cardapioInicial.find((p) => p.obterNome() === nome) ?? cardapioInicial[0];
+
+  const agora = Date.now();
+
+  // Pedido 100 já finalizado com timestamps reais (alimenta a média móvel inicial: 5 min)
+  const pedidoConcluido = new Pedido(
+    'ped-100',
+    { nome: 'Lucas Andrade', matricula: '2026.1.019' },
+    [
+      new ItemCarrinho(buscarPorNome('Coxinha de Frango com Requeijão'), 1),
+      new ItemCarrinho(buscarPorNome('Suco Recife'), 1),
+    ],
+    21.5,
+    pagamentoApp.processarCheckout(21.5, 100),
+    6,
+    'Entregue',
+    '10:05',
+    {
+      pagamentoConfirmado: true,
+      iniciadoPreparoEm: agora - 12 * 60 * 1000,
+      prontoParaRetiradaEm: agora - 7 * 60 * 1000,
+      tempoRealPreparoMinutos: 5,
+    }
+  );
+
+  // Pedido 101 do aluno padrão em preparo (com timestamp iniciadoPreparoEm registrado)
+  const pedidoEmAndamento1 = new Pedido(
+    'ped-101',
+    { nome: 'Filipe Falcão', matricula: '2026.2.001' },
+    [
+      new ItemCarrinho(buscarPorNome('Tapioca de Carne de Sol com Queijo'), 1),
+      new ItemCarrinho(buscarPorNome('Suco OQ'), 1),
+    ],
+    28.9,
+    pagamentoApp.processarCheckout(28.9, 101),
+    7,
+    'Fazendo',
+    '10:12',
+    {
+      iniciadoPreparoEm: agora - 4 * 60 * 1000,
+    }
+  );
+
+  // Pedido 102 recém-recebido na fila
+  const pedidoEmAndamento2 = new Pedido(
+    'ped-102',
+    { nome: 'Beatriz Cavalcanti', matricula: '2026.1.048' },
+    [
+      new ItemCarrinho(buscarPorNome('Cuscuz Carne do Sol com Queijo'), 1),
+      new ItemCarrinho(buscarPorNome('Refrigerante Lata'), 1),
+    ],
+    24.5,
+    pagamentoLoja.processarCheckout(24.5, 102),
+    9,
+    'Recebido',
+    '10:14'
+  );
+
+  return {
+    cardapioInicial,
+    gerenciadorInicial: new GerenciadorPedidos(
+      [pedidoEmAndamento2, pedidoEmAndamento1, pedidoConcluido],
+      102
+    ),
+    processadoresDisponiveis: [pagamentoApp, pagamentoLoja],
+  };
+}
+
