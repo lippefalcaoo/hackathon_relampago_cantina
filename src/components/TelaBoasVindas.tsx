@@ -1,5 +1,5 @@
 import React from 'react';
-import { Utensils, ChefHat, ArrowRight } from 'lucide-react';
+import { ArrowRight, ChefHat, Clock, Sparkles, UtensilsCrossed, Zap, Flame, Shield } from 'lucide-react';
 
 interface TelaBoasVindasProps {
   alunoNome: string;
@@ -16,109 +16,142 @@ export function TelaBoasVindas({
   aoEntrarComoAluno,
   aoEntrarComoCantina,
 }: TelaBoasVindasProps) {
+  const primeiroNome = alunoNome.trim().split(' ')[0] || 'Aluno';
+  const tempoChapaEstimado = tempoMedioPreparoMinutos ?? 6;
+
   return (
-    <main className="flex-1 flex flex-col justify-center px-6 py-12 bg-gradient-to-b from-white via-[#F8FAFC] to-slate-100/70">
-      <div className="max-w-4xl w-full mx-auto text-center space-y-10">
-        {/* Hero Header */}
-        <div className="space-y-4 max-w-2xl mx-auto">
-          <p className="text-xs font-bold tracking-wider uppercase text-[#FF6B00]">
-            CESAR School · Autoatendimento Inteligente
-          </p>
-          <h1
-            className="text-3xl sm:text-5xl font-extrabold text-slate-950 font-display tracking-tight leading-tight"
-            style={{ textWrap: 'balance' }}
+    <main className="flex-1 flex flex-col justify-center relative overflow-hidden bg-[#FAF9F5] px-4 sm:px-6 py-8 sm:py-12">
+      {/* Luz ambiente de fundo (Food-Tech Glow suave) */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 w-[620px] h-[360px] bg-gradient-to-b from-orange-200/40 via-amber-100/20 to-transparent blur-3xl rounded-full -z-0"
+      />
+
+      <div className="relative z-10 max-w-xl w-full mx-auto space-y-6 sm:space-y-8">
+        {/* Barra superior de status: Tag institucional + Botão discreto de Operação */}
+        <div className="flex items-center justify-between gap-3">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/90 border border-stone-200/80 shadow-2xs backdrop-blur-xs text-[11px] font-bold text-stone-700 tracking-wide">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span>CESAR SCHOOL · CANTINA ABERTA</span>
+          </div>
+
+          {/* Botão Secundário Administrativo (KDS) - Elegante e Discreto */}
+          <button
+            type="button"
+            onClick={aoEntrarComoCantina}
+            className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/80 hover:bg-stone-100 border border-stone-200 text-stone-600 hover:text-stone-900 text-xs font-semibold transition-colors cursor-pointer shadow-2xs"
+            title={`Acesso administrativo da equipe (Operador: ${operadorNome})`}
           >
-            Faça seu intervalo de 15 minutos render sem filas.
+            <ChefHat className="w-3.5 h-3.5 text-stone-500" />
+            <span className="hidden xs:inline">Painel KDS</span>
+            <span className="xs:hidden">KDS</span>
+          </button>
+        </div>
+
+        {/* Headline com Tipografia Pesada e Palavras-Chave Destacadas */}
+        <div className="space-y-2.5 text-left sm:text-center">
+          <h1 className="text-3xl sm:text-5xl font-black text-stone-900 tracking-tight leading-[1.1] font-display">
+            Seu intervalo de{' '}
+            <span className="text-[#FF6B00] underline decoration-orange-300/60 decoration-wavy decoration-2">
+              15 minutos
+            </span>{' '}
+            sem perder tempo{' '}
+            <span className="text-[#FF6B00]">na fila</span>.
           </h1>
-          <p className="text-base text-slate-600 leading-relaxed">
-            Escolha seu lanche em segundos, acompanhe o preparo com estimativa inteligente e receba um alerta sonoro assim que estiver pronto para retirar.
+          <p className="text-sm sm:text-base text-stone-600 font-medium leading-relaxed">
+            Peça agora pelo celular, retire no balcão e aproveite cada minuto do seu intervalo.
           </p>
         </div>
 
-        {/* Dois Cards de Seleção de Perfil */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-left">
-          {/* Card 1: Entrar como Comprador (Aluno) */}
-          <div className="group bg-white border-2 border-slate-200 hover:border-[#FF6B00] rounded-2xl p-7 flex flex-col justify-between space-y-6 transition-all duration-150 shadow-xs hover:shadow-md">
-            <div className="space-y-4">
-              <div className="w-12 h-12 rounded-xl bg-orange-50 text-[#FF6B00] flex items-center justify-center">
-                <Utensils className="w-6 h-6" />
+        {/* HERO CARD: Acesso Principal do Aluno (Design Apetitoso & Magnético) */}
+        <div className="relative group bg-white rounded-3xl border border-orange-200/70 p-6 sm:p-8 shadow-xl shadow-orange-500/10 transition-all duration-200 hover:shadow-2xl hover:shadow-orange-500/15 hover:border-orange-300">
+          {/* Badge de boas-vindas do aluno logado */}
+          <div className="flex items-center justify-between gap-3 pb-5 border-b border-stone-100">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-orange-500 to-[#FF6B00] text-white flex items-center justify-center font-extrabold text-sm shadow-sm shadow-orange-500/30">
+                {primeiroNome.charAt(0).toUpperCase()}
               </div>
-
-              <div className="space-y-1.5">
-                <h2 className="text-xl font-extrabold text-slate-900 font-display">
-                  Pedir Agora (Aluno)
-                </h2>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  Cardápio rápido separado entre itens prontos de estufa e lanches na chapa, com status em tempo real e aviso sonoro de retirada.
+              <div>
+                <p className="text-[11px] font-bold uppercase tracking-wider text-stone-600">
+                  Aluno conectado
                 </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
-                <span className="text-slate-500">Conectado como</span>
-                <span className="font-bold text-slate-900">{alunoNome}</span>
+                <p className="text-sm font-extrabold text-stone-900 leading-none mt-0.5">
+                  {alunoNome}
+                </p>
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={aoEntrarComoAluno}
-              className="w-full py-3.5 px-5 text-sm font-bold text-white bg-[#FF6B00] hover:bg-orange-600 rounded-xl transition-colors flex items-center justify-between cursor-pointer shadow-xs"
-            >
-              <span>Entrar como Comprador (Aluno)</span>
-              <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
-            </button>
+            <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-orange-50 text-[#FF6B00] text-xs font-bold border border-orange-200/60">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Pedido Rápido</span>
+            </div>
           </div>
 
-          {/* Card 2: Entrar como Vendedor (Cantina) */}
-          <div className="group bg-white border-2 border-slate-200 hover:border-slate-900 rounded-2xl p-7 flex flex-col justify-between space-y-6 transition-all duration-150 shadow-xs hover:shadow-md">
-            <div className="space-y-4">
-              <div className="w-12 h-12 rounded-xl bg-slate-900 text-white flex items-center justify-center">
-                <ChefHat className="w-6 h-6" />
+          {/* Destaques de Velocidade (Estufa vs Chapa) - Fácil de bater o olho */}
+          <div className="grid grid-cols-2 gap-3 py-5">
+            <div className="p-3.5 rounded-2xl bg-stone-50/90 border border-stone-200/70 space-y-1">
+              <div className="flex items-center gap-1.5 text-emerald-800 text-xs font-bold">
+                <Zap className="w-3.5 h-3.5 text-emerald-600" />
+                <span>Prontos / Estufa</span>
               </div>
-
-              <div className="space-y-1.5">
-                <h2 className="text-xl font-extrabold text-slate-900 font-display">
-                  Operação da Cantina (KDS)
-                </h2>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  Gerencie a fila de pedidos com 1 clique, registre pagamentos no caixa e atualize disponibilidade e itens do cardápio.
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 flex items-center justify-between text-xs">
-                <span className="text-slate-500">Operador ativo</span>
-                <span className="font-bold text-slate-900">{operadorNome}</span>
-              </div>
+              <p className="text-lg font-black font-mono text-stone-900 tabular-nums">
+                ~1 a 2 <span className="text-xs font-semibold text-stone-600">min</span>
+              </p>
+              <p className="text-[11px] text-stone-600 leading-snug">
+                Só esquentar e retirar no balcão
+              </p>
             </div>
 
-            <button
-              type="button"
-              onClick={aoEntrarComoCantina}
-              className="w-full py-3.5 px-5 text-sm font-bold text-white bg-[#0F172A] hover:bg-slate-800 rounded-xl transition-colors flex items-center justify-between cursor-pointer shadow-xs"
-            >
-              <span>Entrar como Vendedor (Cantina)</span>
-              <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-1" />
-            </button>
+            <div className="p-3.5 rounded-2xl bg-stone-50/90 border border-stone-200/70 space-y-1">
+              <div className="flex items-center gap-1.5 text-amber-900 text-xs font-bold">
+                <Flame className="w-3.5 h-3.5 text-amber-600" />
+                <span>Feitos na Chapa</span>
+              </div>
+              <p className="text-lg font-black font-mono text-stone-900 tabular-nums">
+                ~{tempoChapaEstimado} <span className="text-xs font-semibold text-stone-600">min</span>
+              </p>
+              <p className="text-[11px] text-stone-600 leading-snug">
+                Tapiocas e lanches feitos na hora
+              </p>
+            </div>
           </div>
+
+          {/* Call to Action Principal (Hero Button) */}
+          <button
+            type="button"
+            onClick={aoEntrarComoAluno}
+            className="w-full py-4 sm:py-4.5 px-6 rounded-2xl font-black text-base sm:text-lg text-white bg-gradient-to-r from-[#FF6B00] via-orange-500 to-[#E65100] hover:from-orange-500 hover:to-[#FF6B00] shadow-lg shadow-orange-500/30 hover:shadow-orange-500/40 hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-between cursor-pointer group/btn"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-xl bg-white/20 flex items-center justify-center">
+                <UtensilsCrossed className="w-5 h-5 text-white" />
+              </div>
+              <div className="text-left">
+                <span className="block leading-none">Pedir Meu Lanche Agora</span>
+                <span className="text-[11px] font-semibold text-orange-100 font-sans block mt-1">
+                  Cardápio completo em 8 categorias
+                </span>
+              </div>
+            </div>
+            <ArrowRight className="w-5 h-5 text-white transition-transform group-hover/btn:translate-x-1" />
+          </button>
         </div>
 
-        {/* Indicador minimalista de ritmo da cozinha */}
-        <div className="pt-2 flex flex-wrap items-center justify-center gap-6 text-xs text-slate-500">
-          <span>
-            Estufa Expressa:{' '}
-            <strong className="text-emerald-700 font-mono tabular-nums">
-              ~1 a 2 min
-            </strong>
-          </span>
-          <span aria-hidden="true">·</span>
-          <span>
-            Ritmo médio atual da chapa:{' '}
-            <strong className="text-slate-900 font-mono tabular-nums">
-              {tempoMedioPreparoMinutos !== null
-                ? `~${tempoMedioPreparoMinutos} min (média móvel)`
-                : '~6 a 10 min'}
-            </strong>
-          </span>
+        {/* Rodapé Sutil e Discreto com Acesso da Cantina */}
+        <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-stone-600 border-t border-stone-200/60">
+          <div className="flex items-center gap-2">
+            <Clock className="w-3.5 h-3.5 text-[#FF6B00]" />
+            <span>Alerta sonoro automático ao ficar pronto</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={aoEntrarComoCantina}
+            className="inline-flex items-center gap-1.5 text-stone-600 hover:text-stone-900 font-medium transition-colors cursor-pointer"
+          >
+            <Shield className="w-3 h-3 text-stone-500" />
+            <span>Acesso da equipe: <strong>{operadorNome}</strong></span>
+          </button>
         </div>
       </div>
     </main>

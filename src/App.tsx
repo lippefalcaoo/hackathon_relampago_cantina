@@ -537,7 +537,7 @@ export default function App() {
 
   return (
     <div
-      className="min-h-screen flex flex-col bg-[#F8FAFC] text-[#0F172A]"
+      className="min-h-screen flex flex-col bg-[#FAF9F5] text-stone-900 selection:bg-orange-500 selection:text-white"
       data-version={versaoEstado}
     >
       <BarraToasts toasts={toasts} aoFechar={fecharToast} />
