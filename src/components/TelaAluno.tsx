@@ -64,6 +64,7 @@ export interface TelaAlunoProps {
   aoAbrirCarrinho: () => void;
   aoNotificarPedidoPronto: (pedido: Pedido) => void;
   versaoEstado: number;
+  categoriaInicial?: string;
 }
 
 export function TelaAluno({
@@ -91,11 +92,19 @@ export function TelaAluno({
   aoAbrirCarrinho,
   aoNotificarPedidoPronto,
   versaoEstado,
+  categoriaInicial,
 }: TelaAlunoProps) {
   const [buscaTexto, setBuscaTexto] = useState<string>('');
   const [categoriasAbertas, setCategoriasAbertas] = useState<Record<string, boolean>>({
     Salgados: true,
   });
+
+  React.useEffect(() => {
+    if (categoriaInicial) {
+      setCategoriasAbertas((prev) => ({ ...prev, [categoriaInicial]: true }));
+    }
+  }, [categoriaInicial]);
+
   const [permissaoNotificacao, setPermissaoNotificacao] = useState<string>(() =>
     typeof window !== 'undefined' && 'Notification' in window
       ? Notification.permission

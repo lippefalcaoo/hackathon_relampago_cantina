@@ -97,6 +97,7 @@ export default function App() {
   const sincronizarInterface = useCallback(() => setVersaoEstado((v) => v + 1), []);
 
   const [moduloAtivo, setModuloAtivo] = useState<ModuloAtivo>('boas_vindas');
+  const [categoriaInicialAluno, setCategoriaInicialAluno] = useState<string | undefined>(undefined);
   const [drawerCarrinhoAberto, setDrawerCarrinhoAberto] = useState<boolean>(false);
   const [codigoMetodoSelecionado, setCodigoMetodoSelecionado] = useState<string>('PAGAR_NO_APP');
   const [pedidoAcompanhadoId, setPedidoAcompanhadoId] = useState<string>('ped-101');
@@ -562,9 +563,17 @@ export default function App() {
       {moduloAtivo === 'boas_vindas' && (
         <TelaBoasVindas
           alunoNome={perfilAluno.nome}
+          alunoMatricula={perfilAluno.matricula}
           operadorNome={perfilOperador.nome}
           tempoMedioPreparoMinutos={mediaMovelMinutos}
-          aoEntrarComoAluno={() => {
+          quantidadeTotalCarrinho={quantidadeTotalCarrinho}
+          valorTotalCarrinho={valorTotalCarrinho}
+          aoAbrirCarrinho={() => {
+            setModuloAtivo('aluno');
+            setDrawerCarrinhoAberto(true);
+          }}
+          aoEntrarComoAluno={(categoria) => {
+            if (categoria) setCategoriaInicialAluno(categoria);
             void solicitarPermissaoNotificacaoNavegador();
             setModuloAtivo('aluno');
           }}
@@ -575,6 +584,7 @@ export default function App() {
       {/* TelaAluno permanece montada para que seu observer useEffect detecte pedidos prontos em tempo real */}
       <TelaAluno
         visivel={moduloAtivo === 'aluno'}
+        categoriaInicial={categoriaInicialAluno}
         perfilAluno={perfilAluno}
         editandoPerfilAluno={editandoPerfilAluno}
         rascunhoAluno={rascunhoAluno}
